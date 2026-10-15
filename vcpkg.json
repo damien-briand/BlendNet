@@ -1,0 +1,12 @@
+{
+  "name": "blendnet",
+  "version": "0.1.0",
+  "description": "Rendu Blender distribué entre pairs",
+  "builtin-baseline": "REMPLACER_PAR_UN_COMMIT_VCPKG",
+  "dependencies": [
+    "gtest",
+    "openssl",
+    "libzip",
+    "zstd"
+  ]
+}

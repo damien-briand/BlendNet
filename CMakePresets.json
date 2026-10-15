@@ -1,0 +1,40 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    {
+      "name": "vcpkg",
+      "inherits": "base",
+      "displayName": "Debug + vcpkg (VCPKG_ROOT requis)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    },
+    {
+      "name": "vcpkg-release",
+      "inherits": "vcpkg",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "system",
+      "inherits": "base",
+      "displayName": "Debug, paquets système (sans vcpkg)",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "vcpkg", "configurePreset": "vcpkg" },
+    { "name": "system", "configurePreset": "system" }
+  ],
+  "testPresets": [
+    { "name": "vcpkg", "configurePreset": "vcpkg", "output": { "outputOnFailure": true } },
+    { "name": "system", "configurePreset": "system", "output": { "outputOnFailure": true } }
+  ]
+}
