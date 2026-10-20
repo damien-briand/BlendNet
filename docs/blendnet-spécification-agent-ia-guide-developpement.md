@@ -249,7 +249,7 @@ Découverte LAN, mode relais, UPnP, rendu vidéo direct, exécution de scripts P
 
 | Phase | État | Notes |
 |---|---|---|
-| P1 | à faire | |
+| P1 | validée sous Linux | Cibles CMake, config JSON (RF-10/12/24/25), logs (RNF-07), CLI, fenêtre ImGui vide et tests GoogleTest. Compilation complète GUI + CLI réussie via build.sh ; 4/4 tests CTest réussis, dont 11 tests unitaires. Démarrage/arrêt ImGui vérifié sur 3 frames. Windows/macOS restent à vérifier. |
 | P2 | à faire | |
 | P3 | à faire | |
 | P4 | à faire | |

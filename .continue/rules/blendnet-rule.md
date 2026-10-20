@@ -11,7 +11,7 @@ Le document de référence est le **cahier des charges**. Les exigences y sont n
 
 ## Terminologie (ne pas confondre)
 
-- **Source** : l'utilisateur qui demande un rendu. Il joue le rôle de **serveur** (écoute TCP/TLS, distribue les tâches, collecte les résultats) ET d'interface Qt.
+- **Source** : l'utilisateur qui demande un rendu. Il joue le rôle de **serveur** (écoute TCP/TLS, distribue les tâches, collecte les résultats) ET d'interface.
 - **Client** : l'utilisateur qui prête son GPU pour rendre une partie du job.
 - **Job** : un rendu demandé (projet .blend + paramètres). **Chunk** : lot de frames attribué à un client. **Frame** : une image.
 - Un seul et même binaire joue les deux rôles.

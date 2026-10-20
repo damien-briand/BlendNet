@@ -2,7 +2,7 @@
 
 ### Application de rendu Blender distribué entre pairs
 
-**Version :** 1.2 (passage de Qt/QML à Dear ImGui ; renommage BlendNet)  
+**Version :** 1.2 (interface Dear ImGui ; renommage BlendNet)  
 **Statut :** Document de référence pour le développement  
 **Licence cible :** Open source, GPL v3 ou ultérieure (compatible avec la licence de Blender, qui est GPL v2+)
 
@@ -131,7 +131,7 @@ Les exigences sont numérotées pour pouvoir s'y référer pendant le développe
 - **RF-10 — Configuration manuelle.** Dans les paramètres, le client saisit l'adresse IP (ou nom de domaine) et le port de la source auxquels il veut se connecter. Il peut enregistrer plusieurs sources connues.
 - **RF-11 — Connexion persistante.** Le client se connecte au serveur de la source et reste connecté (reconnexion automatique en cas de coupure réseau, avec backoff exponentiel).
 - **RF-12 — Envoi des caractéristiques GPU.** Lors de la première connexion, le client envoie au serveur : modèle de GPU, VRAM disponible, quantité de RAM, système d'exploitation, version de Blender installée (ou absence de Blender), le **backend de calcul choisi dans ses paramètres** (OptiX, CUDA, HIP, oneAPI, Metal ou CPU, voir RF-25) et sa puissance indicative. **Benchmark optionnel** : au premier lancement, l'application propose au client d'exécuter un benchmark Blender (scène de référence) ; s'il accepte, le score est **sauvegardé dans sa configuration locale** et envoyé au serveur à chaque connexion. Le client peut refuser ou relancer le benchmark plus tard sans pénalité.
-- **RF-13 — Notification de job.** À la réception d'une demande de rendu, chaque client connecté voit apparaître une fenêtre popup (même application réduite → notification système + popup) : nom du projet, moteur de rendu, nombre de frames, estimation de charge, boutons **Accepter** / **Refuser**.
+- **RF-13 — Notification de job.** À la réception d'une demande de rendu, chaque client connecté voit apparaître une fenêtre popup applicative (si la fenêtre n'est pas focalisée, une demande d'attention de la fenêtre est émise via GLFW) : nom du projet, moteur de rendu, nombre de frames, estimation de charge, boutons **Accepter** / **Refuser**.
 - **RF-14 — Refus sans sanction.** Un refus n'entraîne aucune pénalité ; le client reçoit les prochains jobs normalement.
 
 ### 4.3 Paramètres du client
@@ -177,7 +177,7 @@ Les exigences sont numérotées pour pouvoir s'y référer pendant le développe
 | Domaine        | Choix                                                                                     | Justification                                          |
 | -------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | Langage        | C++20                                                                                     | Modules, coroutines utiles pour l'asynchronisme réseau |
-| GUI            | **Dear ImGui** (+ GLFW + OpenGL 3.3)                                                      | Interface outil légère, zéro moc, build simple         |
+| GUI            | **Dear ImGui** (+ GLFW + OpenGL 3.3)                                                      | Interface outil légère, build simple                   |
 | Build          | CMake                                                                                     | Standard multiplateforme, packaging                    |
 | Réseau         | TCP/IP via **Asio** (standalone ou Boost) + OpenSSL                                       | Sockets asynchrones, cross-platform                    |
 | Chiffrement    | **OpenSSL** natif (TLS 1.2 minimum, 1.3 recommandé)                                       | Transferts sécurisés obligatoires                      |
@@ -194,34 +194,38 @@ Les exigences sont numérotées pour pouvoir s'y référer pendant le développe
 
 ### 5.2 Protocole applicatif
 
-Toutes les communications passent par **TCP/IP sécurisé (TLS 1.2 minimum, TLS 1.3 recommandé)**. Le protocole applicatif définit des messages typés au-dessus de TLS :
+Toutes les communications passent par **TCP/IP sécurisé (TLS 1.2 minimum, TLS 1.3 recommandé)**. Le protocole applicatif définit des messages typés au-dessus de TLS.
+
+> Le détail binaire de chaque message (header de 12 octets, schémas JSON, limites de taille) est défini dans la spécification de développement (§4), qui fait foi.
 
 
-| Phase          | Message                                                                              | Sens             |
-| -------------- | ------------------------------------------------------------------------------------ | ---------------- |
-| Connexion      | `HELLO` (version protocole, nom utilisateur, machine)                                | Client → Serveur |
-| Enregistrement | `GPU_INFO` (modèle, VRAM, RAM, OS, version Blender, backend choisi, score benchmark) | Client → Serveur |
-| Enregistrement | `CLIENT_PREFS` (moteurs exclus, disponibilité, limites)                              | Client → Serveur |
-| Keep-alive     | `PING` / `PONG` (intervalle 10 s, timeout 30 s)                                      | Bidirectionnel   |
-| Job            | `JOB_OFFER` (id job, projet, moteur, nb frames, taille estimée)                      | Serveur → Client |
-| Job            | `JOB_ACCEPT` / `JOB_DECLINE`                                                         | Client → Serveur |
-| Job            | `JOB_FILE` (zip projet, chunké avec checksum SHA-256)                                | Serveur → Client |
-| Job            | `TASK_ASSIGN` (plage de frames, paramètres de sortie)                                | Serveur → Client |
-| Rendu          | `PROGRESS` (frame courante, %, ETA)                                                  | Client → Serveur |
-| Rendu          | `RESULT_FILE` (zip images, chunké avec checksum SHA-256)                             | Client → Serveur |
-| Contrôle       | `TASK_CANCEL`, `JOB_PAUSE`, `CLIENT_KICK`                                            | Serveur → Client |
+| Phase          | Message                                                                                       | Sens                   |
+| -------------- | --------------------------------------------------------------------------------------------- | ---------------------- |
+| Connexion      | `HELLO` (version protocole, nom utilisateur, machine, token)                                  | Client → Serveur       |
+| Connexion      | `HELLO_OK` / `HELLO_ERR` (token invalide, version incompatible, client banni)                 | Serveur → Client       |
+| Enregistrement | `GPU_INFO` (modèle, VRAM, RAM, OS, version Blender, backend choisi, score benchmark)         | Client → Serveur       |
+| Enregistrement | `CLIENT_PREFS` (moteurs exclus, disponibilité, limites)                                       | Client → Serveur       |
+| Enregistrement | `STATUS_UPDATE` (changement de préférences en cours de session)                               | Client → Serveur       |
+| Keep-alive     | `PING` / `PONG` (intervalle 10 s, timeout 30 s)                                               | Bidirectionnel         |
+| Job            | `JOB_OFFER` (id job, projet, moteur, nb frames, taille estimée)                               | Serveur → Client       |
+| Job            | `JOB_ACCEPT` / `JOB_DECLINE`                                                                  | Client → Serveur       |
+| Job            | `TASK_ASSIGN` (plage de frames, paramètres de sortie)                                         | Serveur → Client       |
+| Rendu          | `PROGRESS` (frame courante, %, ETA)                                                           | Client → Serveur       |
+| Fichiers       | `FILE_BEGIN` / `FILE_DATA` / `FILE_END` (zip projet ou zip résultat, `kind` = `PROJECT_ZIP` ou `RESULT_ZIP`, SHA-256) | Les deux sens |
+| Fichiers       | `FILE_ACK` (accusé par lot et point de reprise) / `FILE_ERR` (échec de checksum, disque plein, abandon) | Récepteur → Émetteur / Les deux sens |
+| Contrôle       | `TASK_CANCEL`, `JOB_PAUSE` / `JOB_RESUME`, `CLIENT_KICK`                                      | Serveur → Client       |
 
 
 Règles :
 
 - Les fichiers volumineux sont transférés par blocs avec barre de progression, reprise sur interruption et vérification SHA-256.
-- Un en-tête binaire simple (taille + type de message) ou un protocole textuel type-delimité précède chaque message.
+- Un en-tête binaire de 12 octets (magic, type, flags, taille) précède chaque message ; `ProtocolCodec` vérifie les limites de taille avant toute allocation.
 - Versionnement du protocole dès la v1 (`HELLO` contient la version) pour anticiper les évolutions.
 
 ### 5.3 Sécurité
 
 - **RNF-S1 — Chiffrement TLS** systématique de tous les échanges (fichiers projet, images, messages).
-- **RNF-S2 — Authentification.** La source génère un **token d'invitation** (code d'appairage) communiqué hors application (par message, orally, etc.). Le client saisit IP:PORT **et** le token dans ses paramètres ; le serveur refuse les connexions sans token valide.
+- **RNF-S2 — Authentification.** La source génère un **token d'invitation** (code d'appairage) communiqué hors application (par message, oralement, etc.). Le client saisit IP:PORT **et** le token dans ses paramètres ; le serveur refuse les connexions sans token valide.
 - **RNF-S3 — Certificat serveur auto-signé épinglé (pinning)** au premier appairage, pour empêcher les attaques de l'homme du milieu ensuite.
 - **RNF-S4 — Cloisonnement des jobs.** Les fichiers reçus sont extraits dans un dossier de travail dédié ; les chemins du ZIP sont validés (protection contre les chemins traversants `../`).
 - **RNF-S5 — Aucune exécution de code arbitraire.** Seul Blender téléchargé depuis blender.org et vérifié par checksum est exécuté.
@@ -258,9 +262,9 @@ Règles :
 
 ### 6.2 Popup de demande — rôle Client
 
-- Popup compact avec notification système : projet, moteur, frames, taille estimée, durée indicative, boutons Accepter / Refuser / "Plus tard" (RF-13).
+- Popup compact : projet, moteur, frames, taille estimée, durée indicative, boutons Accepter / Refuser / "Plus tard" (RF-13).
 - Auto-dismiss configurable (par exemple 60 s sans réponse = refus implicite).
-- **Note ImGui** : la notification système (application minimisée) n'est pas fournie par ImGui/GLFW — le popup applicatif est le mécanisme principal ; une notification OS (bibliothèque dédiée par plateforme) est optionnelle en v1.
+- La notification OS native est hors périmètre v1 ; le popup applicatif et la demande d'attention de la fenêtre (`glfwRequestWindowAttention()`) sont les mécanismes retenus.
 
 ### 6.3 Paramètres — rôle Client
 
@@ -307,14 +311,14 @@ stateDiagram-v2
 
 ## 9. Décisions d'architecture (points tranchés)
 
-Les sept questions ouvertes de la version 1.0 ont été tranchées ; les décisions 2 (interface) et 3 (réseau) ont été **révisées en v1.2** lors du passage de Qt à Dear ImGui. Les décisions sont intégrées au reste du document ; ce tableau sert de synthèse de référence.
+Les sept questions ouvertes de la version 1.0 ont été tranchées ; les décisions 2 (interface) et 3 (réseau) ont été fixées en v1.2. Les décisions sont intégrées au reste du document ; ce tableau sert de synthèse de référence.
 
 
 | #   | Sujet                                                                                                    | Décision                                                                                                                                                                                                                                                                                                                               |
 | --- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | EEVEE et Cycles GPU → frames rendues identiques entre machines différentes (police, version GPU, OIDN) ? | Frames identiques si même version de Blender, même fichier, mêmes paramètres et même backend. Le **backend de calcul est choisi par le client dans ses paramètres** (OptiX, CUDA, HIP, oneAPI, Metal ou CPU), déclaré au serveur et appliqué au rendu via l'option ligne de commande `--cycles-device <BACKEND>`. Voir RF-25 et RF-55. |
-| 2   | Interface graphique : Qt ou autre ?                                                                      | **Dear ImGui** retenu (**v1.2, remplace QML**) : plus léger, pas de moc, pas de build QML, build CMake trivial. Backend GLFW + OpenGL 3.3.                                                                                                                                                                                             |
-| 3   | Backend réseau ?                                                                                         | **Asio** (standalone ou Boost) + OpenSSL retenu (**v1.2**) — Qt Network abandonné en même temps que Qt.                                                                                                                                                                                                                                |
+| 2   | Interface graphique ?                                                                                    | **Dear ImGui** retenu : léger, build CMake trivial. Backend GLFW + OpenGL 3.3.                                                                                                                                                                                                                                                         |
+| 3   | Backend réseau ?                                                                                         | **Asio** (standalone ou Boost) + OpenSSL retenu.                                                                                                                                                                                                                                                                                       |
 | 4   | Compression des transferts : ZIP simple ou ZIP + zstd au transport ?                                     | **ZIP pour le stockage local** (jobs et résultats), **zstd en option** pour accélérer les transferts réseau.                                                                                                                                                                                                                           |
 | 5   | Score GPU : benchmark intégré au premier lancement ou simple déclaration du modèle ?                     | **Benchmark optionnel** : proposé au client au premier lancement, score sauvegardé dans sa configuration locale et envoyé au serveur. Voir RF-12.                                                                                                                                                                                      |
 | 6   | Support des animations en vidéo seule vs image sequences ?                                               | **Séquences d'images uniquement** en v1 ; l'assemblage vidéo est hors périmètre. Voir RF-04.                                                                                                                                                                                                                                           |
@@ -382,7 +386,7 @@ blendnet/
 ```mermaid
 flowchart TD
   subgraph UI["Couche UI"]
-    QML["Vues ImGui"]
+    VIEWS["Vues ImGui"]
     CTRL["Appels UI vers les rôles"]
   end
   subgraph SRV["Module serveur (rôle source)"]
@@ -403,6 +407,7 @@ flowchart TD
     PROTO["protocol"]
     CONF["config + model + log"]
   end
+  VIEWS --> CTRL
   CTRL --> RS
   CTRL --> SC
   RS --> ORCH
@@ -471,7 +476,7 @@ classDiagram
 
 | Classe                | Responsabilité                                           | Référence     |
 | --------------------- | -------------------------------------------------------- | ------------- |
-| `ProtocolCodec`       | Encodage/décodage de tous les messages, framing, version | §5.2          |
+| `ProtocolCodec`       | Encodage/décodage de tous les messages, framing, version, limites de taille | §5.2 |
 | `RenderServer`        | Écoute TLS, cycle de vie des sessions                    | RF-30, RNF-S1 |
 | `ClientSession`       | État d'un client connecté + progression                  | RF-12, RF-30  |
 | `JobOrchestrator`     | Découpage, attribution, redistribution                   | RF-50 à RF-52 |
@@ -483,7 +488,7 @@ classDiagram
 | `BlenderInstaller`    | Détection/téléchargement vérifié de Blender              | RF-41, RNF-S5 |
 | `RenderProcess`       | Lancement Blender CLI, `--cycles-device`, progression    | RF-42, RF-25  |
 | `GpuInfoService`      | Détection GPU + benchmark optionnel                      | RF-12         |
-| `NotificationService` | Popup + notification système                             | RF-13         |
+| `NotificationService` | Popup + attention fenêtre                                | RF-13         |
 
 
 ### 10.5 Modèle de threads

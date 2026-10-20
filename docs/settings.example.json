@@ -1,0 +1,10 @@
+{
+    "schemaVersion": 1,
+    "language": "fr",
+    "logLevel": "info",
+    "computeBackend": "CPU",
+    "workDirectory": "jobs",
+    "blenderCacheDirectory": "blender-cache",
+    "benchmarkScore": null,
+    "knownSources": []
+}

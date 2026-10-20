@@ -1,1 +1,8 @@
 ./.continue
+/build/
+/build-*/
+/.cache/
+/.vscode/
+compile_commands.json
+imgui.ini
+/.blendnet/
