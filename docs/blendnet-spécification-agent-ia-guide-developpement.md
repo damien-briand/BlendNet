@@ -263,7 +263,7 @@ Découverte LAN, mode relais, UPnP, rendu vidéo direct, exécution de scripts P
 |---|---|---|
 | P1 | validée sous Linux | Cibles CMake, config JSON (RF-10/12/24/25), logs (RNF-07), CLI, fenêtre ImGui vide et tests GoogleTest. Compilation complète GUI + CLI réussie via build.sh ; 4/4 tests CTest réussis, dont 11 tests unitaires. Démarrage/arrêt ImGui vérifié sur 3 frames. Windows/macOS restent à vérifier. |
 | P2 | validée sous Linux | 22 messages typés, ProtocolCodec headless, en-tête 12 octets et FILE_DATA avec identifiant UTF-8 documentés ; 13 tests protocole (fixtures, troncatures, tailles, schémas, corpus de 1 000 entrées). 24 tests unitaires au total et 4/4 CTest réussis, y compris en build headless avec AddressSanitizer/UndefinedBehaviorSanitizer. |
-| P3 | à faire | |
+| P3 | validée sous Linux | Asio standalone + OpenSSL (TLS ≥ 1.2), RenderServer/SourceConnection, identité persistante et token aléatoire, pin après HELLO_OK, PING/PONG, timeouts et backoff 1 s → 5 min. 28 tests unitaires + 12 tests réseau et démo des deux CLI : 6/6 CTest réussis sur le build complet et le build headless ASan/UBSan. Voir [réseau P3](reseau-p3.md). Intégration des vues en P8 ; Windows/macOS restent à vérifier. |
 | P4 | à faire | |
 | P5 | à faire | |
 | P6 | à faire | |

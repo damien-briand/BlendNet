@@ -35,6 +35,9 @@ if [[ -n "$previous_generator" && "$previous_generator" != "Unix Makefiles" ]]; 
     done
 fi
 
+# Supprimer tout ce qui se trouve dans le /build sauf les libblendnet
+find "$build_dir" ! -name "libblendnet*" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+
 cmake "${configure_args[@]}" "$@"
 cmake --build "$build_dir" --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
 ctest --test-dir "$build_dir" --output-on-failure

@@ -10,7 +10,7 @@
 
 namespace blendnet {
 
-// RF-10 / RNF-S3 : le pin sera renseigné lors de l'appairage en P3.
+// RF-10 / RNF-S3 : le pin est persisté après HELLO_OK lors de l'appairage.
 struct KnownSource {
     std::string host;
     int port = 47050;

@@ -14,6 +14,8 @@ include(FetchContent)
 include(CTest)
 
 find_package(Threads REQUIRED)
+find_package(OpenSSL 1.1.1 REQUIRED)
+find_path(ASIO_INCLUDE_DIR asio.hpp REQUIRED)
 
 # RF-10 / RNF-07 : configuration JSON et journalisation.
 set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
@@ -44,6 +46,11 @@ add_library(blendnet-core STATIC
     src/core/config/AppSettings.cpp
     src/core/log/Logger.cpp
     src/core/protocol/ProtocolCodec.cpp
+    src/core/network/NetworkTypes.cpp
+    src/core/network/Security.cpp
+    src/core/network/TlsChannel.cpp
+    src/core/network/TlsServer.cpp
+    src/core/network/ClientSocket.cpp
 )
 target_include_directories(blendnet-core PUBLIC
     "${PROJECT_SOURCE_DIR}/src/core"
@@ -51,16 +58,24 @@ target_include_directories(blendnet-core PUBLIC
 )
 target_link_libraries(blendnet-core
     PUBLIC Threads::Threads
-    PRIVATE nlohmann_json::nlohmann_json
+    PRIVATE nlohmann_json::nlohmann_json OpenSSL::SSL OpenSSL::Crypto
 )
+target_include_directories(blendnet-core SYSTEM PRIVATE "${ASIO_INCLUDE_DIR}")
+target_compile_definitions(blendnet-core PRIVATE ASIO_STANDALONE)
+if(WIN32)
+    target_link_libraries(blendnet-core PRIVATE ws2_32 mswsock)
+    target_compile_definitions(blendnet-core PRIVATE _WIN32_WINNT=0x0A00)
+endif()
 blendnet_warnings(blendnet-core)
 
-# Les rôles seront implémentés dans les phases suivantes.
-add_library(blendnet-server STATIC src/server/ServerModule.cpp)
+# Façades des rôles ; la logique réseau headless reste dans core/.
+add_library(blendnet-server STATIC src/server/RenderServer.cpp)
+target_include_directories(blendnet-server PUBLIC "${PROJECT_SOURCE_DIR}/src/server")
 target_link_libraries(blendnet-server PUBLIC blendnet-core)
 blendnet_warnings(blendnet-server)
 
-add_library(blendnet-client STATIC src/client/ClientModule.cpp)
+add_library(blendnet-client STATIC src/client/SourceConnection.cpp)
+target_include_directories(blendnet-client PUBLIC "${PROJECT_SOURCE_DIR}/src/client")
 target_link_libraries(blendnet-client PUBLIC blendnet-core)
 blendnet_warnings(blendnet-client)
 
@@ -68,6 +83,10 @@ blendnet_warnings(blendnet-client)
 add_executable(blendnet-cli tools/blendnet-cli/main.cpp)
 target_link_libraries(blendnet-cli PRIVATE blendnet-client)
 blendnet_warnings(blendnet-cli)
+
+add_executable(blendnet-server-cli tools/blendnet-server/main.cpp)
+target_link_libraries(blendnet-server-cli PRIVATE blendnet-server)
+blendnet_warnings(blendnet-server-cli)
 
 if(BLENDNET_BUILD_GUI)
     find_package(OpenGL REQUIRED)
@@ -157,6 +176,7 @@ if(BUILD_TESTING)
         tests/unit/AppSettingsTests.cpp
         tests/unit/LoggerTests.cpp
         tests/unit/ProtocolCodecTests.cpp
+        tests/unit/NetworkTests.cpp
     )
     target_include_directories(blendnet-tests PRIVATE "${PROJECT_SOURCE_DIR}/tests")
     target_link_libraries(blendnet-tests PRIVATE
@@ -165,6 +185,22 @@ if(BUILD_TESTING)
     blendnet_warnings(blendnet-tests)
 
     add_test(NAME blendnet-unit COMMAND blendnet-tests)
+    add_executable(blendnet-network-tests tests/integration/NetworkTests.cpp)
+    target_include_directories(blendnet-network-tests PRIVATE "${PROJECT_SOURCE_DIR}/tests")
+    target_include_directories(blendnet-network-tests SYSTEM PRIVATE "${ASIO_INCLUDE_DIR}")
+    target_compile_definitions(blendnet-network-tests PRIVATE ASIO_STANDALONE)
+    target_link_libraries(blendnet-network-tests PRIVATE blendnet-server blendnet-client
+        GTest::gtest_main OpenSSL::SSL OpenSSL::Crypto)
+    blendnet_warnings(blendnet-network-tests)
+    add_test(NAME blendnet-network COMMAND blendnet-network-tests)
+    set_tests_properties(blendnet-network PROPERTIES TIMEOUT 30)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME blendnet-cli-network COMMAND "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/integration/cli_network.py"
+            "$<TARGET_FILE:blendnet-server-cli>" "$<TARGET_FILE:blendnet-cli>")
+        set_tests_properties(blendnet-cli-network PROPERTIES TIMEOUT 20)
+    endif()
     add_test(NAME blendnet-cli-version COMMAND blendnet-cli --version)
     set_tests_properties(blendnet-cli-version PROPERTIES
         PASS_REGULAR_EXPRESSION "BlendNet ${PROJECT_VERSION}"

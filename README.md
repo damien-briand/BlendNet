@@ -4,12 +4,16 @@ Le rendu d'animations ou de scènes complexes sous Blender est une opération tr
 ## État du développement
 
 Le socle **P1** comprend les cibles CMake en couches, la configuration JSON, le journal,
-une fenêtre ImGui vide et une CLI sans interface. Le réseau et le rendu distribué seront
-implémentés dans les phases suivantes ; la CLI ne simule pas encore de client réseau.
+une fenêtre ImGui vide et une CLI sans interface.
 
 La phase **P2** ajoute `ProtocolCodec` et les 22 types de messages, avec validation des
 schémas, framing big-endian de 12 octets et blocs binaires bornés. Voir la
 [spécification du protocole v1](docs/protocole-v1.md).
+
+La phase **P3** ajoute le réseau TLS, l'appairage par token, le pin du certificat,
+PING/PONG et la reconnexion. Les outils `blendnet-server-cli` et `blendnet-cli --connect`
+permettent une [démo de connexion headless](docs/reseau-p3.md). Le rendu distribué et les
+vues graphiques de connexion sont prévus dans les phases suivantes.
 
 Références : [cahier des charges](docs/cahier-des-charges-blendnet.md) et
 [phases P1 à P9](docs/blendnet-spécification-agent-ia-guide-developpement.md).
@@ -17,7 +21,8 @@ Références : [cahier des charges](docs/cahier-des-charges-blendnet.md) et
 ## Compilation
 
 Prérequis : **CMake ≥ 3.21**, Git et compilateur **C++20** (GCC, Clang ou MSVC).
-La GUI requiert OpenGL 3.3 et GLFW. CMake utilise nlohmann/json, GLFW et GoogleTest installés
+Le réseau requiert les en-têtes **Asio standalone** et **OpenSSL ≥ 1.1.1**. La GUI requiert
+OpenGL 3.3 et GLFW. CMake utilise nlohmann/json, GLFW et GoogleTest installés
 quand ils sont disponibles, et télécharge les dépendances manquantes depuis GitHub.
 Dear ImGui est téléchargé à une version fixe.
 
@@ -25,7 +30,8 @@ Dear ImGui est téléchargé à une version fixe.
 
 ```sh
 sudo apt install build-essential cmake git libgl1-mesa-dev \
-    libglfw3-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+    libglfw3-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+    libasio-dev libssl-dev
 ./build.sh
 ./build/blendnet
 ```
@@ -57,6 +63,8 @@ commandes manuelles ci-dessus supposent un dossier neuf ou déjà configuré pou
 ### Windows
 
 Installer Visual Studio 2022 avec les outils de développement C++, CMake et Git.
+Installer aussi Asio standalone et OpenSSL pour l'architecture ciblée ; renseigner
+`ASIO_INCLUDE_DIR` et `OPENSSL_ROOT_DIR` si CMake ne les trouve pas automatiquement.
 Depuis un terminal développeur :
 
 ```powershell
@@ -68,7 +76,8 @@ ctest --test-dir build -C Debug --output-on-failure
 
 ### macOS
 
-Installer les outils de compilation Xcode, CMake et Git, puis :
+Installer les outils de compilation Xcode, CMake, Git, Asio standalone et OpenSSL,
+puis (renseigner `OPENSSL_ROOT_DIR` si nécessaire) :
 
 ```sh
 ./build.sh
@@ -128,9 +137,12 @@ de la configuration ne sont jamais journalisés par les points d'entrée.
 ```text
 blendnet → blendnet-ui → blendnet-server / blendnet-client → blendnet-core
 blendnet-cli → blendnet-client → blendnet-core
+blendnet-server-cli → blendnet-server → blendnet-core
 blendnet-tests → blendnet-core
+blendnet-network-tests → blendnet-server / blendnet-client → blendnet-core
 ```
 
 `src/core/` ne dépend d'aucune bibliothèque graphique. Les modules serveur et client
-sont des points d'ancrage pour P3 ; les sous-dossiers des phases suivantes sont réservés.
+exposent les services réseau aux outils et à la future UI ; les sous-dossiers des phases
+suivantes sont réservés.
 Le style C++ est défini par `.clang-format`.

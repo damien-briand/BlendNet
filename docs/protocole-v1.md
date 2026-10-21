@@ -2,7 +2,8 @@
 
 Références : cahier des charges §5.2, RF-10/12/13/25/42/50/54, RNF-04 et RNF-S2.
 Le code de référence est `src/core/protocol/`. Ce module est headless et sans socket.
-La couche TLS et la politique de session seront implémentées en P3 ; les transferts en P4.
+La [couche TLS et la politique de session](reseau-p3.md) sont implémentées en P3 ;
+les transferts sont prévus en P4.
 
 ## En-tête
 
