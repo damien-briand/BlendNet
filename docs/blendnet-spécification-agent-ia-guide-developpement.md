@@ -69,17 +69,22 @@ tests/                         unit/, integration/, protocol-fuzz/
 Tout octet circulant sur le socket TLS est un **message** :
 
 ```text
-HEADER (14 octets, big-endian):
+HEADER (12 octets, big-endian):
   [0..2)  magic    : u16 = 0x5253 ('RS')
   [2..3)  reserved : u8 = 0
   [3..4)  msgType  : u8  (voir §4.2)
   [4..8)  flags    : u32 = 0 (réservé)
-  [8..14) length   : u32 = taille en octets du payload
+  [8..12) length   : u32 = taille en octets du payload
 PAYLOAD : length octets — JSON UTF-8 pour les messages de contrôle ;
-          binaire pour FILE_DATA (voir §4.4).
+          binaire pour FILE_DATA (voir §4.3).
 ```
 
 `ProtocolCodec` est la SEULE classe autorisée à lire/écrire ce framing. Toute trame dont le magic/length est invalide → fermeture immédiate de la connexion + log.
+
+**Correction P2 :** l'ancienne mention de 14 octets était incompatible avec les champs
+décrits (2 + 1 + 1 + 4 + 4). L'en-tête fait **12 octets**, conformément au cahier des charges.
+L'octet réservé et les flags doivent être nuls ; un type inconnu est rejeté.
+La [spécification du protocole v1](protocole-v1.md) précise les limites et l'API de décodage.
 
 ### 4.2 Messages de contrôle (payload JSON)
 
@@ -108,12 +113,19 @@ Un « fichier » = un flux identifié, envoyé par blocs, reprise possible :
 | ID | Type | Sens | Contenu |
 |---|---|---|---|
 | 30 | `FILE_BEGIN` | les 2 | JSON : `{"fileId":str, "kind":"PROJECT_ZIP"\|"RESULT_ZIP", "totalBytes":int, "sha256":hexstr, "chunkSize":int (défaut 1 MiB)}` |
-| 31 | `FILE_DATA` | les 2 | BINAIRE (pas JSON) : `[u32 fileId][u32 seq][u32 dataLen][dataLen octets]` |
+| 31 | `FILE_DATA` | les 2 | BINAIRE, big-endian : `[u32 fileIdLen][fileIdLen octets UTF-8 fileId][u32 seq][u32 dataLen][dataLen octets]` |
 | 32 | `FILE_END` | les 2 | JSON : `{"fileId":str, "sha256":hexstr}` |
 | 33 | `FILE_ACK` | récepteur→émetteur | JSON : `{"fileId":str, "nextSeq":int}` — accusé par lot ; sert aussi de **reprise** : le récepteur qui se reconnecte renvoie `FILE_ACK` avec son `nextSeq` courant, l'émetteur reprend à ce point |
 | 34 | `FILE_ERR` | les 2 | JSON : `{"fileId":str, "reason":"sha_mismatch"\|"disk_full"\|"aborted"}` |
 
 Règles : à la réception de `FILE_END`, vérifier SHA-256 → `FILE_ACK` final ou `FILE_ERR`. Un fichier reçu s'écrit en flux dans le dossier de travail (jamais entièrement en RAM). Numéroter les fichiers `fileId = jobId + "_" + kind`.
+
+**Correction P2 :** `fileId` garde le même type textuel dans tous les messages ; l'ancien
+`u32 fileId` dans `FILE_DATA` ne pouvait pas représenter `jobId + "_" + kind`.
+Son encodage binaire est désormais précédé de sa longueur (1 à 256 octets UTF-8).
+Un bloc contient 1 à 1 048 576 octets de données, sans dépasser `FILE_BEGIN.chunkSize`
+(cette dernière vérification dépend de l'état du transfert et sera assurée en P4).
+Un fichier vide ne produit aucun `FILE_DATA`.
 
 ### 4.4 Ordre imposé d'une session client
 
@@ -250,7 +262,7 @@ Découverte LAN, mode relais, UPnP, rendu vidéo direct, exécution de scripts P
 | Phase | État | Notes |
 |---|---|---|
 | P1 | validée sous Linux | Cibles CMake, config JSON (RF-10/12/24/25), logs (RNF-07), CLI, fenêtre ImGui vide et tests GoogleTest. Compilation complète GUI + CLI réussie via build.sh ; 4/4 tests CTest réussis, dont 11 tests unitaires. Démarrage/arrêt ImGui vérifié sur 3 frames. Windows/macOS restent à vérifier. |
-| P2 | à faire | |
+| P2 | validée sous Linux | 22 messages typés, ProtocolCodec headless, en-tête 12 octets et FILE_DATA avec identifiant UTF-8 documentés ; 13 tests protocole (fixtures, troncatures, tailles, schémas, corpus de 1 000 entrées). 24 tests unitaires au total et 4/4 CTest réussis, y compris en build headless avec AddressSanitizer/UndefinedBehaviorSanitizer. |
 | P3 | à faire | |
 | P4 | à faire | |
 | P5 | à faire | |

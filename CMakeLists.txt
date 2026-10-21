@@ -43,6 +43,7 @@ endfunction()
 add_library(blendnet-core STATIC
     src/core/config/AppSettings.cpp
     src/core/log/Logger.cpp
+    src/core/protocol/ProtocolCodec.cpp
 )
 target_include_directories(blendnet-core PUBLIC
     "${PROJECT_SOURCE_DIR}/src/core"
@@ -155,10 +156,11 @@ if(BUILD_TESTING)
     add_executable(blendnet-tests
         tests/unit/AppSettingsTests.cpp
         tests/unit/LoggerTests.cpp
+        tests/unit/ProtocolCodecTests.cpp
     )
     target_include_directories(blendnet-tests PRIVATE "${PROJECT_SOURCE_DIR}/tests")
     target_link_libraries(blendnet-tests PRIVATE
-        blendnet-core GTest::gtest_main
+        blendnet-core GTest::gtest_main nlohmann_json::nlohmann_json
     )
     blendnet_warnings(blendnet-tests)
 
