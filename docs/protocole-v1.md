@@ -3,7 +3,7 @@
 Références : cahier des charges §5.2, RF-10/12/13/25/42/50/54, RNF-04 et RNF-S2.
 Le code de référence est `src/core/protocol/`. Ce module est headless et sans socket.
 La [couche TLS et la politique de session](reseau-p3.md) sont implémentées en P3 ;
-les transferts sont prévus en P4.
+les [transferts avec reprise](transfert-p4.md) sont implémentés en P4.
 
 ## En-tête
 
@@ -60,7 +60,7 @@ Le payload est binaire :
 - `seq` : u32, à partir de 0 (la cohérence de séquence relève du transfert P4).
 - `dataLen` : 1 à **1 048 576 octets** (1 MiB).
 - Taille exacte du payload : `12 + fileIdLen + dataLen` ; maximum **1 048 844 octets**.
-- `FILE_BEGIN.chunkSize` est compris entre 1 et 1 MiB. P4 vérifiera aussi que chaque
+- `FILE_BEGIN.chunkSize` est compris entre 1 et 1 MiB. P4 vérifie aussi que chaque
   bloc respecte le `chunkSize` annoncé, le quota disque et l'état du transfert.
 - Un fichier de taille nulle n'envoie aucun bloc.
 

@@ -1,6 +1,7 @@
 #include "network/TlsServer.h"
 #include "network/Security.h"
 #include "network/TlsChannel.h"
+#include "network/TransferLink.h"
 
 #include <algorithm>
 #include <map>
@@ -20,6 +21,8 @@ struct TlsServer::Impl {
         asio::steady_timer heartbeat;
         Stage stage = Stage::Hello;
         ClientInfo info;
+        std::string peerScope;
+        std::shared_ptr<detail::TransferLink> transfers;
         steady_clock::time_point lastPong;
 
         Session(Impl& server, std::string sessionId)
@@ -38,6 +41,10 @@ struct TlsServer::Impl {
                 [weak](NetworkError error) {
                     if (const auto self = weak.lock()) {
                         self->stage = Stage::Closing;
+                        if (self->transfers) {
+                            self->transfers->stop();
+                            self->transfers.reset();
+                        }
                         self->deadline.cancel();
                         self->heartbeat.cancel();
                         self->owner.remove(self->id, error);
@@ -96,6 +103,21 @@ struct TlsServer::Impl {
                 deadline.cancel();
                 lastPong = steady_clock::now();
                 owner.publish(info);
+                peerScope = info.userName + std::string(1, '\0') + info.machineName;
+                if (!owner.options.transfers.directory.empty()) {
+                    const auto worker =
+                        owner.transferWorkers
+                            .try_emplace(peerScope, asio::make_strand(owner.workers))
+                            .first->second;
+                    transfers = std::make_shared<detail::TransferLink>(
+                        owner.io, worker, channel, owner.options.transfers, peerScope,
+                        [owner = &owner, session = id,
+                         scope = peerScope](transfer::TransferProgress progress) {
+                            owner->report(session, scope, std::move(progress));
+                        });
+                    for (const auto& [fileId, request] : owner.pendingFiles[peerScope])
+                        transfers->sendFile(request);
+                }
                 owner.events.push({EventKind::Ready, NetworkError::None, id});
                 owner.log(LogLevel::Info, "TLS client registered");
                 tick();
@@ -109,7 +131,7 @@ struct TlsServer::Impl {
                 info.preferences = preferences->preferences;
                 owner.publish(info);
                 owner.events.push({EventKind::PreferencesChanged, NetworkError::None, id});
-            } else
+            } else if (!transfers || !transfers->handle(std::move(message)))
                 channel->close(NetworkError::ProtocolViolation);
         }
         void tick() {
@@ -130,6 +152,7 @@ struct TlsServer::Impl {
     Logger& logger;
     ServerOptions options;
     asio::io_context io;
+    asio::thread_pool workers{2};
     asio::ssl::context tls{asio::ssl::context::tls_server};
     asio::ip::tcp::acceptor acceptor{io};
     asio::steady_timer acceptRetry{io};
@@ -137,6 +160,8 @@ struct TlsServer::Impl {
     std::jthread thread;
     bool stopping = false;
     std::map<std::string, std::shared_ptr<Session>> sessions;
+    std::map<std::string, asio::strand<asio::thread_pool::executor_type>> transferWorkers;
+    std::map<std::string, std::map<std::string, transfer::FileRequest>> pendingFiles;
     mutable std::mutex mutex;
     ServerSnapshot state;
     EventQueue<NetworkEvent> events;
@@ -209,6 +234,41 @@ struct TlsServer::Impl {
                                       accept();
                               });
     }
+    void report(const std::string& id, const std::string& scope,
+                transfer::TransferProgress progress) {
+        progress.peerId = id;
+        {
+            const std::lock_guard lock(mutex);
+            recordTransfer(state.transfers, progress);
+        }
+        NetworkEvent event{EventKind::TransferProgress, NetworkError::None, id};
+        event.transfer = progress;
+        events.push(std::move(event));
+        if (progress.direction == transfer::Direction::Sending &&
+            (progress.state == transfer::TransferState::Completed ||
+             progress.state == transfer::TransferState::Failed))
+            pendingFiles[scope].erase(progress.fileId);
+        if (progress.state == transfer::TransferState::Completed)
+            log(LogLevel::Info, "File transfer completed");
+        if (progress.state == transfer::TransferState::Failed)
+            log(LogLevel::Warning, transfer::toString(progress.error));
+    }
+    void offerFile(const std::string& id, const transfer::FileRequest& request) {
+        const auto found = sessions.find(id);
+        if (found == sessions.end() || !found->second->transfers)
+            return;
+        auto& pending = pendingFiles[found->second->peerScope];
+        if (pending.contains(request.fileId))
+            return;
+        if (pending.size() >= 16) {
+            report(id, found->second->peerScope,
+                   {request.fileId, transfer::Direction::Sending, transfer::TransferState::Failed,
+                    transfer::TransferError::Busy});
+            return;
+        }
+        pending[request.fileId] = request;
+        found->second->transfers->sendFile(request);
+    }
     void publish(const ClientInfo& client) {
         const std::lock_guard lock(mutex);
         const auto found =
@@ -223,6 +283,10 @@ struct TlsServer::Impl {
         {
             const std::lock_guard lock(mutex);
             std::erase_if(state.clients, [&id](const ClientInfo& item) { return item.id == id; });
+            for (auto& item : state.transfers)
+                if (item.peerId == id && (item.state == transfer::TransferState::Transferring ||
+                                          item.state == transfer::TransferState::Preparing))
+                    item.state = transfer::TransferState::Suspended;
         }
         events.push({EventKind::Disconnected, error, id});
         log(error == NetworkError::Stopped ? LogLevel::Info : LogLevel::Warning, toString(error));
@@ -243,6 +307,9 @@ struct TlsServer::Impl {
             work.reset();
         });
         thread.join();
+        workers.join();
+        io.restart();
+        io.poll();
     }
 };
 
@@ -264,6 +331,19 @@ void TlsServer::disconnect(const std::string& id) {
             if (found != impl->sessions.end())
                 found->second->channel->sendAndClose(
                     protocol::ClientKick{"source requested disconnect"}, NetworkError::Kicked);
+        });
+}
+void TlsServer::sendFile(const std::string& id, const transfer::FileRequest& request) {
+    if (m_impl)
+        asio::post(m_impl->io,
+                   [impl = m_impl.get(), id, request] { impl->offerFile(id, request); });
+}
+void TlsServer::interrupt(const std::string& id) {
+    if (m_impl)
+        asio::post(m_impl->io, [impl = m_impl.get(), id] {
+            const auto found = impl->sessions.find(id);
+            if (found != impl->sessions.end())
+                found->second->channel->close(NetworkError::IoError);
         });
 }
 ServerSnapshot TlsServer::snapshot() const {

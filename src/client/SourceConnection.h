@@ -10,6 +10,7 @@ class SourceConnection {
         return m_client.start(options);
     }
     void stop() { m_client.stop(); }
+    void sendFile(const transfer::FileRequest& request) { m_client.sendFile(request); }
     void updatePreferences(const protocol::ClientPrefs& preferences) {
         m_client.updatePreferences(preferences);
     }

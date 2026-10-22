@@ -2,6 +2,7 @@
 
 #include "config/AppSettings.h"
 #include "protocol/Messages.h"
+#include "transfer/TransferTypes.h"
 
 #include <chrono>
 #include <filesystem>
@@ -42,7 +43,15 @@ enum class ConnectionState {
     Reconnecting,
     Stopped
 };
-enum class EventKind { Listening, Ready, Disconnected, Reconnecting, Error, PreferencesChanged };
+enum class EventKind {
+    Listening,
+    Ready,
+    Disconnected,
+    Reconnecting,
+    Error,
+    PreferencesChanged,
+    TransferProgress
+};
 
 struct NetworkEvent {
     NetworkEvent(EventKind eventKind, NetworkError eventError = NetworkError::None,
@@ -53,6 +62,7 @@ struct NetworkEvent {
     NetworkError error = NetworkError::None;
     std::string sessionId;
     std::chrono::milliseconds retryDelay{0};
+    std::optional<transfer::TransferProgress> transfer;
 };
 
 // RNF-05 : aucun callback réseau vers l'UI, consommation de snapshots/événements.
@@ -95,6 +105,7 @@ struct ServerOptions {
     std::string token;
     std::size_t maxClients = 64;
     NetworkTimings timings;
+    transfer::TransferOptions transfers;
 };
 
 struct ClientOptions {
@@ -107,6 +118,7 @@ struct ClientOptions {
                           "linux",           std::nullopt, "CPU", std::nullopt};
     protocol::ClientPrefs preferences{{}, "AVAILABLE", std::nullopt, 1, std::nullopt};
     NetworkTimings timings;
+    transfer::TransferOptions transfers;
 };
 
 struct ClientInfo {
@@ -119,6 +131,7 @@ struct ClientInfo {
 struct ServerSnapshot {
     std::uint16_t port = 0;
     std::vector<ClientInfo> clients;
+    std::vector<transfer::TransferProgress> transfers;
 };
 struct ClientSnapshot {
     ConnectionState state = ConnectionState::Disconnected;
@@ -128,7 +141,10 @@ struct ClientSnapshot {
     std::size_t readyCount = 0;
     std::size_t pongsReceived = 0;
     std::size_t retryCount = 0;
+    std::vector<transfer::TransferProgress> transfers;
 };
+void recordTransfer(std::vector<transfer::TransferProgress>& records,
+                    const transfer::TransferProgress& progress);
 
 class ReconnectPolicy {
   public:

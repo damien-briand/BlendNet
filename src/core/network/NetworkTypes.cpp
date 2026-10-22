@@ -3,6 +3,20 @@
 #include <algorithm>
 
 namespace blendnet::network {
+void recordTransfer(std::vector<transfer::TransferProgress>& records,
+                    const transfer::TransferProgress& progress) {
+    const auto found = std::find_if(records.begin(), records.end(), [&progress](const auto& old) {
+        return old.fileId == progress.fileId && old.direction == progress.direction &&
+               old.peerId == progress.peerId;
+    });
+    if (found != records.end())
+        *found = progress;
+    else {
+        if (records.size() >= 128)
+            records.erase(records.begin());
+        records.push_back(progress);
+    }
+}
 std::string_view toString(NetworkError error) {
     switch (error) {
     case NetworkError::None:

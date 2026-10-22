@@ -1,4 +1,5 @@
 #include "../common/Cli.h"
+#include "../common/TransferCli.h"
 #include "SourceConnection.h"
 #include "Version.h"
 #include "config/AppSettings.h"
@@ -19,6 +20,7 @@ int run(int argc, char** argv) {
     bool initialize = false;
     std::optional<unsigned int> sourceIndex;
     unsigned int seconds = 0;
+    blendnet::cli::TransferArguments transferArguments;
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument(argv[index]);
         if (argument == "--help") {
@@ -29,11 +31,16 @@ int run(int argc, char** argv) {
                    "  --init-config  Create missing settings; preserve an existing file.\n"
                    "  --connect INDEX  Connect to a known source (zero-based index).\n"
                    "  --seconds N  Exit after N seconds (0: wait for Ctrl+C).\n";
+            std::cout << blendnet::cli::transferHelp;
             return 0;
         }
         if (argument == "--version") {
             std::cout << "BlendNet " << blendnet::version << '\n';
             return 0;
+        }
+        if (argument == "--exit-after-transfer") {
+            transferArguments.exitAfter = true;
+            continue;
         }
         if (argument == "--config" && index + 1 < argc) {
             configPath = blendnet::pathFromUtf8(argv[++index]);
@@ -48,12 +55,16 @@ int run(int argc, char** argv) {
             seconds = *duration;
         } else if (argument == "--init-config") {
             initialize = true;
+        } else if (index + 1 < argc && transferArguments.consume(argument, argv[index + 1])) {
+            ++index;
         } else {
             std::cerr << "Invalid argument. Use --help.\n";
             return 2;
         }
     }
 
+    if (!transferArguments.valid() || (!sourceIndex && !transferArguments.file.path.empty()))
+        return 2;
     blendnet::AppSettings settings;
     const auto loaded = blendnet::AppSettings::load(configPath, settings);
     if (loaded != blendnet::SettingsError::None && loaded != blendnet::SettingsError::NotFound) {
@@ -84,6 +95,11 @@ int run(int argc, char** argv) {
     blendnet::network::ClientOptions options;
     options.source = settings.knownSources[*sourceIndex];
     options.settingsPath = configPath;
+    options.transfers = transferArguments.storage;
+    if (options.transfers.directory.empty())
+        options.transfers.directory = settings.workDirectory.is_absolute()
+                                          ? settings.workDirectory
+                                          : configPath.parent_path() / settings.workDirectory;
     options.gpu.backend = settings.computeBackend;
     options.gpu.benchmarkScore = settings.benchmarkScore;
 #ifdef _WIN32
@@ -97,9 +113,12 @@ int run(int argc, char** argv) {
         std::cerr << blendnet::network::toString(started) << '\n';
         return 1;
     }
+    if (!transferArguments.file.path.empty())
+        connection.sendFile(transferArguments.file);
     blendnet::cli::handleSignals();
     bool ready = false;
     bool failed = false;
+    bool transferDone = false;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
     while (!blendnet::cli::interrupted &&
            (seconds == 0 || std::chrono::steady_clock::now() < deadline)) {
@@ -107,6 +126,12 @@ int run(int argc, char** argv) {
             if (event.kind == blendnet::network::EventKind::Ready) {
                 ready = true;
                 std::cout << "READY " << connection.snapshot().tlsVersion << '\n' << std::flush;
+            } else if (event.kind == blendnet::network::EventKind::TransferProgress &&
+                       event.transfer) {
+                if (!blendnet::cli::printTransfer(*event.transfer))
+                    failed = true;
+                if (event.transfer->state == blendnet::transfer::TransferState::Completed)
+                    transferDone = true;
             } else if (event.kind == blendnet::network::EventKind::Error) {
                 std::cerr << blendnet::network::toString(event.error) << '\n';
                 failed = true;
@@ -114,6 +139,8 @@ int run(int argc, char** argv) {
                 std::cout << "RECONNECTING " << event.retryDelay.count() << " ms\n" << std::flush;
             }
         }
+        if (failed || (transferArguments.exitAfter && transferDone))
+            break;
         if (connection.snapshot().state == blendnet::network::ConnectionState::Stopped)
             break;
         std::this_thread::sleep_for(std::chrono::milliseconds(20));

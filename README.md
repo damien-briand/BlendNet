@@ -12,8 +12,12 @@ schémas, framing big-endian de 12 octets et blocs binaires bornés. Voir la
 
 La phase **P3** ajoute le réseau TLS, l'appairage par token, le pin du certificat,
 PING/PONG et la reconnexion. Les outils `blendnet-server-cli` et `blendnet-cli --connect`
-permettent une [démo de connexion headless](docs/reseau-p3.md). Le rendu distribué et les
-vues graphiques de connexion sont prévus dans les phases suivantes.
+permettent une [démo de connexion headless](docs/reseau-p3.md).
+
+La phase **P4** ajoute les transferts de fichiers dans les deux sens, le SHA-256 en
+flux, les checkpoints de reprise et les quotas de réception. Les deux CLI permettent
+une [démo de transfert avec reprise](docs/transfert-p4.md), y compris après redémarrage
+du récepteur. Le rendu distribué et les vues graphiques viennent dans les phases suivantes.
 
 Références : [cahier des charges](docs/cahier-des-charges-blendnet.md) et
 [phases P1 à P9](docs/blendnet-spécification-agent-ia-guide-developpement.md).
@@ -124,7 +128,8 @@ Emplacements par défaut :
 
 Sans répertoire utilisateur disponible, le repli est `.blendnet/settings.json`.
 Le [fichier d'exemple](docs/settings.example.json) montre les champs du socle. Les chemins
-de travail et de cache sont réservés aux phases suivantes ; aucun rendu n'est lancé en P1.
+de travail sert désormais à la réception des fichiers côté client ; le cache sera utilisé
+dans les phases suivantes. Aucun rendu n'est encore lancé.
 Le backend par défaut est `CPU` ; la détection des backends disponibles viendra en P6.
 
 Le journal de la GUI est écrit dans `logs/blendnet.log`, à côté de la configuration,
@@ -140,6 +145,7 @@ blendnet-cli → blendnet-client → blendnet-core
 blendnet-server-cli → blendnet-server → blendnet-core
 blendnet-tests → blendnet-core
 blendnet-network-tests → blendnet-server / blendnet-client → blendnet-core
+blendnet-transfer-tests → blendnet-server / blendnet-client → blendnet-core
 ```
 
 `src/core/` ne dépend d'aucune bibliothèque graphique. Les modules serveur et client

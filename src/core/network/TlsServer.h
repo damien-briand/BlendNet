@@ -16,6 +16,9 @@ class TlsServer {
     NetworkError start(const ServerOptions& options);
     void stop();
     void disconnect(const std::string& sessionId);
+    void sendFile(const std::string& sessionId, const transfer::FileRequest& request);
+    // Coupure de transport (diagnostic) ; contrairement au kick, le client peut se reconnecter.
+    void interrupt(const std::string& sessionId);
     ServerSnapshot snapshot() const;
     std::vector<NetworkEvent> drainEvents();
 

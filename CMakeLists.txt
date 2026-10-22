@@ -9,6 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(BLENDNET_BUILD_GUI "Build the desktop application" ON)
 option(BLENDNET_TEST_GUI "Register a GUI smoke test (requires a display and OpenGL 3.3)" OFF)
+option(BLENDNET_TEST_LARGE_TRANSFERS "Register the 1 GiB ZIP transfer/resume test" OFF)
 
 include(FetchContent)
 include(CTest)
@@ -51,6 +52,8 @@ add_library(blendnet-core STATIC
     src/core/network/TlsChannel.cpp
     src/core/network/TlsServer.cpp
     src/core/network/ClientSocket.cpp
+    src/core/network/TransferLink.cpp
+    src/core/transfer/TransferEngine.cpp
 )
 target_include_directories(blendnet-core PUBLIC
     "${PROJECT_SOURCE_DIR}/src/core"
@@ -177,6 +180,7 @@ if(BUILD_TESTING)
         tests/unit/LoggerTests.cpp
         tests/unit/ProtocolCodecTests.cpp
         tests/unit/NetworkTests.cpp
+        tests/unit/TransferTests.cpp
     )
     target_include_directories(blendnet-tests PRIVATE "${PROJECT_SOURCE_DIR}/tests")
     target_link_libraries(blendnet-tests PRIVATE
@@ -194,12 +198,31 @@ if(BUILD_TESTING)
     blendnet_warnings(blendnet-network-tests)
     add_test(NAME blendnet-network COMMAND blendnet-network-tests)
     set_tests_properties(blendnet-network PROPERTIES TIMEOUT 30)
+    add_executable(blendnet-transfer-tests tests/integration/TransferTests.cpp)
+    target_include_directories(blendnet-transfer-tests PRIVATE "${PROJECT_SOURCE_DIR}/tests")
+    target_include_directories(blendnet-transfer-tests SYSTEM PRIVATE "${ASIO_INCLUDE_DIR}")
+    target_compile_definitions(blendnet-transfer-tests PRIVATE ASIO_STANDALONE)
+    target_link_libraries(blendnet-transfer-tests PRIVATE blendnet-server blendnet-client
+        GTest::gtest_main OpenSSL::SSL OpenSSL::Crypto)
+    blendnet_warnings(blendnet-transfer-tests)
+    add_test(NAME blendnet-transfer COMMAND blendnet-transfer-tests)
+    set_tests_properties(blendnet-transfer PROPERTIES TIMEOUT 90)
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
         add_test(NAME blendnet-cli-network COMMAND "${Python3_EXECUTABLE}"
             "${PROJECT_SOURCE_DIR}/tests/integration/cli_network.py"
             "$<TARGET_FILE:blendnet-server-cli>" "$<TARGET_FILE:blendnet-cli>")
         set_tests_properties(blendnet-cli-network PROPERTIES TIMEOUT 20)
+        add_test(NAME blendnet-cli-transfer COMMAND "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/integration/cli_transfer.py"
+            "$<TARGET_FILE:blendnet-server-cli>" "$<TARGET_FILE:blendnet-cli>")
+        set_tests_properties(blendnet-cli-transfer PROPERTIES TIMEOUT 100)
+        if(BLENDNET_TEST_LARGE_TRANSFERS)
+            add_test(NAME blendnet-transfer-large COMMAND "${Python3_EXECUTABLE}"
+                "${PROJECT_SOURCE_DIR}/tests/integration/cli_transfer.py"
+                "$<TARGET_FILE:blendnet-server-cli>" "$<TARGET_FILE:blendnet-cli>" --large)
+            set_tests_properties(blendnet-transfer-large PROPERTIES TIMEOUT 120 LABELS large)
+        endif()
     endif()
     add_test(NAME blendnet-cli-version COMMAND blendnet-cli --version)
     set_tests_properties(blendnet-cli-version PROPERTIES

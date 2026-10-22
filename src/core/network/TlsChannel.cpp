@@ -16,8 +16,9 @@ void TlsChannel::callbacks(std::function<void(protocol::Message)> onMessage,
     m_onClosed = std::move(onClosed);
 }
 void TlsChannel::read() {
-    if (m_closed || m_draining)
+    if (m_closed || m_draining || m_paused || m_reading)
         return;
+    m_reading = true;
     asio::async_read(
         m_stream, asio::buffer(m_header),
         [self = shared_from_this()](const asio::error_code& error, std::size_t) {
@@ -40,27 +41,29 @@ void TlsChannel::read() {
                     auto message = protocol::ProtocolCodec::decodePayload(header, self->m_payload);
                     if (!message)
                         return self->close(NetworkError::ProtocolViolation);
+                    self->m_reading = false;
                     if (self->m_onMessage)
                         self->m_onMessage(std::move(*message.value));
                     self->read();
                 });
         });
 }
-void TlsChannel::enqueue(const protocol::Message& message) {
-    const auto encoded = protocol::ProtocolCodec::encode(message);
+void TlsChannel::enqueue(const protocol::Message& message, std::function<void()> onWritten) {
+    auto encoded = protocol::ProtocolCodec::encode(message);
     if (!encoded)
         return close(NetworkError::ProtocolViolation);
     if (m_queuedBytes + encoded.value->size() > 4 * 1024 * 1024)
         return close(NetworkError::QueueFull);
     const bool idle = m_writes.empty();
     m_queuedBytes += encoded.value->size();
-    m_writes.push_back(std::make_shared<protocol::Bytes>(std::move(*encoded.value)));
+    m_writes.push_back(
+        {std::make_shared<protocol::Bytes>(std::move(*encoded.value)), std::move(onWritten)});
     if (idle)
         write();
 }
-void TlsChannel::send(const protocol::Message& message) {
+void TlsChannel::send(const protocol::Message& message, std::function<void()> onWritten) {
     if (!m_closed && !m_draining)
-        enqueue(message);
+        enqueue(message, std::move(onWritten));
 }
 void TlsChannel::sendAndClose(const protocol::Message& message, NetworkError reason) {
     if (m_closed || m_draining)
@@ -72,10 +75,11 @@ void TlsChannel::sendAndClose(const protocol::Message& message, NetworkError rea
 void TlsChannel::write() {
     if (m_closed || m_writes.empty())
         return;
-    const auto bytes = m_writes.front();
+    const auto bytes = m_writes.front().bytes;
+    const auto onWritten = m_writes.front().onWritten;
     asio::async_write(
         m_stream, asio::buffer(*bytes),
-        [self = shared_from_this(), bytes](const asio::error_code& error, std::size_t) {
+        [self = shared_from_this(), bytes, onWritten](const asio::error_code& error, std::size_t) {
             // bytes reste vivant même si close() vide la file avant la fin d'async_write.
             if (self->m_closed)
                 return;
@@ -87,6 +91,8 @@ void TlsChannel::write() {
                 self->write();
             else if (self->m_draining)
                 self->close(self->m_closeReason);
+            if (onWritten)
+                onWritten();
         });
 }
 void TlsChannel::close(NetworkError reason) {

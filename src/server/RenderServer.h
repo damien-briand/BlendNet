@@ -12,6 +12,10 @@ class RenderServer {
     }
     void stop() { m_server.stop(); }
     void disconnect(const std::string& id) { m_server.disconnect(id); }
+    void interrupt(const std::string& id) { m_server.interrupt(id); }
+    void sendFile(const std::string& id, const transfer::FileRequest& request) {
+        m_server.sendFile(id, request);
+    }
     network::ServerSnapshot snapshot() const { return m_server.snapshot(); }
     std::vector<network::NetworkEvent> drainEvents() { return m_server.drainEvents(); }
 

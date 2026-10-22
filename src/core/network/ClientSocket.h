@@ -14,6 +14,7 @@ class ClientSocket {
     NetworkError start(const ClientOptions& options);
     void stop();
     void updatePreferences(const protocol::ClientPrefs& preferences);
+    void sendFile(const transfer::FileRequest& request);
     ClientSnapshot snapshot() const;
     std::vector<NetworkEvent> drainEvents();
 

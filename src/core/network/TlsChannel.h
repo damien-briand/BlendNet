@@ -21,20 +21,31 @@ class TlsChannel : public std::enable_shared_from_this<TlsChannel> {
     void callbacks(std::function<void(protocol::Message)> onMessage,
                    std::function<void(NetworkError)> onClosed);
     void read();
-    void send(const protocol::Message& message);
+    void send(const protocol::Message& message, std::function<void()> onWritten = {});
+    void pauseReading() { m_paused = true; }
+    void resumeReading() {
+        m_paused = false;
+        read();
+    }
     void sendAndClose(const protocol::Message& message, NetworkError reason);
     void close(NetworkError reason);
 
   private:
     void write();
-    void enqueue(const protocol::Message& message);
+    void enqueue(const protocol::Message& message, std::function<void()> onWritten = {});
     Stream m_stream;
     std::array<std::uint8_t, protocol::headerBytes> m_header{};
     protocol::Bytes m_payload;
-    std::deque<std::shared_ptr<protocol::Bytes>> m_writes;
+    struct PendingWrite {
+        std::shared_ptr<protocol::Bytes> bytes;
+        std::function<void()> onWritten;
+    };
+    std::deque<PendingWrite> m_writes;
     std::size_t m_queuedBytes = 0;
     bool m_closed = false;
     bool m_draining = false;
+    bool m_paused = false;
+    bool m_reading = false;
     NetworkError m_closeReason = NetworkError::Stopped;
     std::function<void(protocol::Message)> m_onMessage;
     std::function<void(NetworkError)> m_onClosed;

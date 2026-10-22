@@ -1,9 +1,11 @@
 #include "network/ClientSocket.h"
 #include "network/Security.h"
 #include "network/TlsChannel.h"
+#include "network/TransferLink.h"
 
 #include <openssl/x509v3.h>
 
+#include <map>
 #include <thread>
 
 namespace blendnet::network {
@@ -14,6 +16,8 @@ struct ClientSocket::Impl {
     Logger& logger;
     ClientOptions options;
     asio::io_context io;
+    asio::thread_pool workers{2};
+    asio::strand<asio::thread_pool::executor_type> transferWorker{asio::make_strand(workers)};
     asio::ssl::context tls{asio::ssl::context::tls_client};
     asio::ip::tcp::resolver resolver{io};
     asio::steady_timer deadline{io};
@@ -22,6 +26,8 @@ struct ClientSocket::Impl {
     asio::executor_work_guard<asio::io_context::executor_type> work{asio::make_work_guard(io)};
     std::jthread thread;
     std::shared_ptr<TlsChannel> channel;
+    std::shared_ptr<detail::TransferLink> transfers;
+    std::map<std::string, transfer::FileRequest> pendingFiles;
     ReconnectPolicy policy;
     bool stopping = false;
     bool awaitingHello = true;
@@ -164,6 +170,36 @@ struct ClientSocket::Impl {
                     });
             });
     }
+    void report(transfer::TransferProgress progress) {
+        {
+            const std::lock_guard lock(mutex);
+            recordTransfer(state.transfers, progress);
+        }
+        NetworkEvent event{EventKind::TransferProgress};
+        event.transfer = progress;
+        events.push(std::move(event));
+        if (progress.direction == transfer::Direction::Sending &&
+            (progress.state == transfer::TransferState::Completed ||
+             progress.state == transfer::TransferState::Failed))
+            pendingFiles.erase(progress.fileId);
+        if (progress.state == transfer::TransferState::Completed)
+            logger.log(LogLevel::Info, "File transfer completed");
+        if (progress.state == transfer::TransferState::Failed)
+            logger.log(LogLevel::Warning, transfer::toString(progress.error));
+    }
+    void offerFile(const transfer::FileRequest& request) {
+        if (options.transfers.directory.empty() ||
+            (pendingFiles.size() >= 16 && !pendingFiles.contains(request.fileId))) {
+            report({request.fileId, transfer::Direction::Sending, transfer::TransferState::Failed,
+                    transfer::TransferError::InvalidRequest});
+            return;
+        }
+        if (pendingFiles.contains(request.fileId))
+            return;
+        pendingFiles[request.fileId] = request;
+        if (transfers)
+            transfers->sendFile(request);
+    }
     void receive(protocol::Message message) {
         if (awaitingHello) {
             if (const auto* error = std::get_if<protocol::HelloErr>(&message))
@@ -196,6 +232,13 @@ struct ClientSocket::Impl {
                 const std::lock_guard lock(mutex);
                 ++state.readyCount;
             }
+            if (!options.transfers.directory.empty()) {
+                transfers = std::make_shared<detail::TransferLink>(
+                    io, transferWorker, channel, options.transfers, fingerprint,
+                    [this](transfer::TransferProgress progress) { report(std::move(progress)); });
+                for (const auto& [id, request] : pendingFiles)
+                    transfers->sendFile(request);
+            }
             events.push({EventKind::Ready});
             logger.log(LogLevel::Info, "Source authenticated; GPU_INFO and CLIENT_PREFS sent");
             tick();
@@ -209,7 +252,7 @@ struct ClientSocket::Impl {
             ++state.pongsReceived;
         } else if (std::holds_alternative<protocol::ClientKick>(message))
             channel->close(NetworkError::Kicked);
-        else
+        else if (!transfers || !transfers->handle(std::move(message)))
             channel->close(NetworkError::ProtocolViolation);
     }
     void tick() {
@@ -227,6 +270,17 @@ struct ClientSocket::Impl {
         });
     }
     void failed(NetworkError error) {
+        if (transfers) {
+            transfers->stop();
+            transfers.reset();
+        }
+        {
+            const std::lock_guard lock(mutex);
+            for (auto& item : state.transfers)
+                if (item.state == transfer::TransferState::Transferring ||
+                    item.state == transfer::TransferState::Preparing)
+                    item.state = transfer::TransferState::Suspended;
+        }
         channel.reset();
         resolver.cancel();
         deadline.cancel();
@@ -271,6 +325,10 @@ struct ClientSocket::Impl {
             work.reset();
         });
         thread.join();
+        workers.join();
+        // Les workers annulés peuvent avoir posté une dernière complétion après io.run().
+        io.restart();
+        io.poll();
     }
 };
 
@@ -296,6 +354,10 @@ void ClientSocket::updatePreferences(const protocol::ClientPrefs& preferences) {
             if (impl->channel && !impl->awaitingHello)
                 impl->channel->send(protocol::StatusUpdate{preferences});
         });
+}
+void ClientSocket::sendFile(const transfer::FileRequest& request) {
+    if (m_impl)
+        asio::post(m_impl->io, [impl = m_impl.get(), request] { impl->offerFile(request); });
 }
 ClientSnapshot ClientSocket::snapshot() const {
     if (!m_impl)
