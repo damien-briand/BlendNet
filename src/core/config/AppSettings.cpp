@@ -171,6 +171,7 @@ SettingsError AppSettings::load(const std::filesystem::path& path, AppSettings& 
         AppSettings settings;
         settings.language = data.value("language", settings.language);
         settings.computeBackend = data.value("computeBackend", settings.computeBackend);
+        settings.keepCompletedJobs = data.value("keepCompletedJobs", settings.keepCompletedJobs);
         const auto level = parseLogLevel(data.value("logLevel", std::string("info")));
         if (!level) {
             return SettingsError::InvalidValue;
@@ -236,6 +237,7 @@ SettingsError AppSettings::save(const std::filesystem::path& path) const {
                         {"language", language},
                         {"logLevel", toString(logLevel)},
                         {"computeBackend", computeBackend},
+                        {"keepCompletedJobs", keepCompletedJobs},
                         {"workDirectory", pathUtf8(workDirectory)},
                         {"blenderCacheDirectory", pathUtf8(blenderCacheDirectory)},
                         {"benchmarkScore", benchmarkScore ? Json(*benchmarkScore) : Json(nullptr)},

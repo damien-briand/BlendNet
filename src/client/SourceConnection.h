@@ -11,6 +11,7 @@ class SourceConnection {
     }
     void stop() { m_client.stop(); }
     void sendFile(const transfer::FileRequest& request) { m_client.sendFile(request); }
+    void cancelFile(const std::string& fileId) { m_client.cancelFile(fileId); }
     void sendJobMessage(const protocol::Message& message) { m_client.sendJobMessage(message); }
     void updatePreferences(const protocol::ClientPrefs& preferences) {
         m_client.updatePreferences(preferences);

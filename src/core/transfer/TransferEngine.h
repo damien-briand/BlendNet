@@ -10,6 +10,9 @@ namespace blendnet::transfer {
 TransferResult<std::string> sha256File(const std::filesystem::path& path,
                                        const std::atomic_bool* cancelled = nullptr);
 std::string storageKey(std::string_view text);
+// Only a completed, unleased P4 checkpoint with the expected fileId may be removed.
+// Caller supplies a path obtained from a validated Receiving/Completed event.
+bool removeCompletedTransfer(const std::filesystem::path& path, const std::string& fileId);
 
 class TransferReceiver {
   public:

@@ -27,7 +27,10 @@ supporte la perte d'un client pendant son chunk.
 La phase **P6** ajoute l'installation de Blender vérifiée par SHA-256, la sonde réelle
 des backends, le rendu local annulable et le benchmark persisté. La
 [démo Blender P6](docs/blender-p6.md) rend un vrai chunk de trois frames en CPU.
-Le client complet qui exécute les jobs réseau vient en P7 ; les vues graphiques en P8.
+La phase **P7** raccorde le client complet : projet reçu par TLS, extraction ZIP
+sécurisée, Blender réel, ZIP résultat et nettoyage après accusé de réception.
+Le mode `blendnet-cli --execute-jobs` et les préférences de rétention sont décrits
+dans la [démo client P7](docs/client-p7.md). Les vues graphiques viennent en P8.
 
 Références : [cahier des charges](docs/cahier-des-charges-blendnet.md) et
 [phases P1 à P9](docs/blendnet-spécification-agent-ia-guide-developpement.md).

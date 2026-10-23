@@ -66,8 +66,37 @@ void TransferLink::beginNext() {
         });
     });
 }
+void TransferLink::cancelFile(const std::string& fileId) {
+    if (m_stopped)
+        return;
+    const bool active = m_sending && !m_requests.empty() && m_requests.front().fileId == fileId;
+    const auto first = m_requests.begin() + (m_sending ? 1 : 0);
+    m_requests.erase(std::remove_if(first, m_requests.end(),
+                                    [&](const auto& request) { return request.fileId == fileId; }),
+                     m_requests.end());
+    if (active) {
+        // Prepare may still be hashing on the worker. Queue cancellation behind it so
+        // FILE_BEGIN, FILE_ERR, and the next FILE_BEGIN reach the peer in that order.
+        asio::post(m_worker, [self = shared_from_this(), fileId] {
+            if (self->m_stopped || self->m_sender.progress().fileId != fileId)
+                return;
+            self->m_sender.fail(TransferError::Aborted);
+            const auto progress = self->m_sender.progress();
+            asio::post(self->m_io, [self, progress] {
+                if (self->m_stopped)
+                    return;
+                self->m_channel->send(protocol::FileErr{progress.fileId, "aborted"});
+                self->publish(progress);
+                self->completeSend(progress);
+            });
+        });
+    }
+}
 void TransferLink::completeSend(const TransferProgress& progress) {
     if (progress.state != TransferState::Completed && progress.state != TransferState::Failed)
+        return;
+    // A late ACK/error from a cancelled file must not pop the next queued request.
+    if (m_requests.empty() || m_requests.front().fileId != progress.fileId)
         return;
     m_sending = false;
     m_pumping = false;
@@ -121,6 +150,17 @@ bool TransferLink::handle(protocol::Message message) {
         TransferProgress progress;
         bool sending = false;
         if (const auto* ack = std::get_if<protocol::FileAck>(&message)) {
+            if (ack->fileId != self->m_sender.progress().fileId) {
+                asio::post(self->m_io, [self, id = ack->fileId] {
+                    if (self->m_stopped)
+                        return;
+                    --self->m_pending;
+                    self->m_channel->send(protocol::FileErr{id, "aborted"});
+                    if (self->m_pending < windowBlocks)
+                        self->m_channel->resumeReading();
+                });
+                return;
+            }
             sending = true;
             const auto error = self->m_sender.acknowledge(*ack);
             progress = self->m_sender.progress();

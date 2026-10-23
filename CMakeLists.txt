@@ -99,6 +99,8 @@ add_library(blendnet-core STATIC
     src/core/jobs/JobOrchestrator.cpp
     src/core/jobs/ResultAssembler.cpp
     src/core/jobs/SimulatedWorker.cpp
+    src/core/jobs/JobExecutor.cpp
+    src/core/archive/ZipService.cpp
     src/core/jobs/JobFile.cpp
     src/core/blender/BlenderTypes.cpp
     src/core/blender/Process.cpp
@@ -237,6 +239,7 @@ if(BUILD_TESTING)
         tests/unit/TransferTests.cpp
         tests/unit/JobTests.cpp
         tests/unit/BlenderTests.cpp
+        tests/unit/ZipServiceTests.cpp
     )
     target_include_directories(blendnet-tests PRIVATE "${PROJECT_SOURCE_DIR}/tests")
     target_link_libraries(blendnet-tests PRIVATE

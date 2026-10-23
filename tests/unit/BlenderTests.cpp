@@ -3,11 +3,15 @@
 #include "blender/BlenderInstaller.h"
 #include "blender/GpuInfoService.h"
 #include "blender/Process.h"
+#include "jobs/JobExecutor.h"
+#include "jobs/ResultAssembler.h"
+#include "protocol/ProtocolCodec.h"
 #include "transfer/TransferEngine.h"
 
 #include <gtest/gtest.h>
 #include <zip.h>
 
+#include <condition_variable>
 #include <sstream>
 
 using namespace blendnet;
@@ -89,6 +93,218 @@ class BlenderTest : public ::testing::Test {
     }
 };
 } // namespace
+namespace {
+struct ExecutorHarness {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::vector<protocol::Message> messages;
+    std::vector<transfer::FileRequest> files;
+    std::vector<std::string> cancelledFiles;
+    std::unique_ptr<jobs::JobExecutor> executor;
+    ExecutorHarness(jobs::ExecutorOptions options, Download download) {
+        executor = std::make_unique<jobs::JobExecutor>(
+            std::move(options),
+            jobs::JobExecutor::Callbacks{[this](const protocol::Message& message) {
+                                             const std::lock_guard lock(mutex);
+                                             messages.push_back(message);
+                                             changed.notify_all();
+                                         },
+                                         [this](const transfer::FileRequest& file) {
+                                             const std::lock_guard lock(mutex);
+                                             files.push_back(file);
+                                             changed.notify_all();
+                                         },
+                                         [this](const std::string& id) {
+                                             const std::lock_guard lock(mutex);
+                                             cancelledFiles.push_back(id);
+                                         }},
+            std::move(download));
+    }
+    ~ExecutorHarness() { executor.reset(); }
+    void message(protocol::Message message) {
+        network::NetworkEvent event{network::EventKind::JobMessage};
+        event.message = std::move(message);
+        executor->handle(event);
+    }
+    bool waitMessages(protocol::MessageType type, std::size_t count = 1) {
+        std::unique_lock lock(mutex);
+        return changed.wait_for(lock, 10s, [&] {
+            return std::size_t(std::count_if(messages.begin(), messages.end(), [&](const auto& m) {
+                       return protocol::ProtocolCodec::typeOf(m) == type;
+                   })) >= count;
+        });
+    }
+    bool waitFiles(std::size_t count) {
+        std::unique_lock lock(mutex);
+        return changed.wait_for(lock, 15s, [&] { return files.size() >= count; });
+    }
+    bool state(jobs::ExecutorState expected) {
+        const auto end = std::chrono::steady_clock::now() + 10s;
+        do {
+            for (const auto& event : executor->drainEvents())
+                if (event.state == expected)
+                    return true;
+            std::this_thread::sleep_for(10ms);
+        } while (std::chrono::steady_clock::now() < end);
+        return false;
+    }
+    void transfer(const transfer::FileRequest& file, transfer::Direction direction) {
+        network::NetworkEvent event{network::EventKind::TransferProgress};
+        event.transfer = transfer::TransferProgress{file.fileId,
+                                                    direction,
+                                                    transfer::TransferState::Completed,
+                                                    transfer::TransferError::None,
+                                                    0,
+                                                    0,
+                                                    0,
+                                                    file.path};
+        executor->handle(event);
+    }
+    void offer(const std::filesystem::path& project, std::string scene = "scene.blend") {
+        auto* zip = zip_open(project.string().c_str(), ZIP_CREATE | ZIP_TRUNCATE, nullptr);
+        ASSERT_NE(zip, nullptr);
+        static const char text[] = "Fixture scene";
+        auto* source = zip_source_buffer(zip, text, sizeof(text), 0);
+        ASSERT_NE(source, nullptr);
+        ASSERT_GE(zip_file_add(zip, scene.c_str(), source, 0), 0);
+        ASSERT_EQ(zip_close(zip), 0);
+        message(protocol::JobOffer{"executor-job", "Fixture", "CYCLES", 1, 3, 1,
+                                   std::filesystem::file_size(project), "4.2.1", "PNG"});
+        ASSERT_TRUE(waitMessages(protocol::MessageType::JobAccept));
+        transfer({project, "executor-job_PROJECT_ZIP"}, transfer::Direction::Receiving);
+    }
+};
+} // namespace
+TEST_F(BlenderTest, ExecutorPackagesActualChildOutputAndCleansOnlyAfterFinalAck) {
+    jobs::ExecutorOptions options;
+    options.directory = directory.path() / "executor";
+    options.blenderCache = cache;
+    ExecutorHarness harness(options, download);
+    harness.offer(directory.path() / "project.zip");
+    const protocol::TaskAssign task{"executor-job", "first_attempt", 1, 2, 1, "frame_####", "PNG"};
+    harness.message(task);
+    ASSERT_TRUE(harness.waitFiles(1));
+    transfer::FileRequest result;
+    {
+        const std::lock_guard lock(harness.mutex);
+        result = harness.files.front();
+    }
+    ASSERT_TRUE(std::filesystem::exists(result.path));
+    EXPECT_EQ(result.fileId, jobs::resultFileId(task.chunkId));
+    EXPECT_EQ(
+        jobs::ResultAssembler::validate(task, result.path, directory.path() / "validated").size(),
+        2u);
+    harness.transfer(result, transfer::Direction::Sending);
+    ASSERT_TRUE(harness.state(jobs::ExecutorState::Completed));
+    EXPECT_FALSE(std::filesystem::exists(result.path.parent_path()));
+    // Source reuses the accepted project for a subsequent chunk without another file transfer.
+    harness.message(
+        protocol::TaskAssign{"executor-job", "second_attempt", 3, 3, 1, "frame_####", "PNG"});
+    ASSERT_TRUE(harness.waitFiles(2));
+    EXPECT_EQ(requests, 2); // one verified installation (archive and published checksum)
+}
+TEST_F(BlenderTest, ExecutorRetentionPreservesConfirmedResults) {
+    jobs::ExecutorOptions options;
+    options.directory = directory.path() / "executor";
+    options.blenderCache = cache;
+    options.keepCompletedJobs = true;
+    ExecutorHarness harness(options, download);
+    harness.offer(directory.path() / "project.zip");
+    harness.message(protocol::TaskAssign{"executor-job", "attempt", 1, 1, 1, "frame_####", "PNG"});
+    ASSERT_TRUE(harness.waitFiles(1));
+    transfer::FileRequest result;
+    {
+        const std::lock_guard lock(harness.mutex);
+        result = harness.files.front();
+    }
+    harness.transfer(result, transfer::Direction::Sending);
+    ASSERT_TRUE(harness.state(jobs::ExecutorState::Completed));
+    harness.executor.reset();
+    EXPECT_TRUE(std::filesystem::exists(result.path));
+    EXPECT_TRUE(std::filesystem::exists(result.path.parent_path() / "frames/frame_0001.png"));
+}
+TEST_F(BlenderTest, ExecutorRejectsQuotaBeforeInstallingOrRendering) {
+    jobs::ExecutorOptions options;
+    options.directory = directory.path() / "executor";
+    options.blenderCache = cache;
+    options.quotaBytes = 1;
+    ExecutorHarness harness(options, download);
+    harness.offer(directory.path() / "project.zip");
+    harness.message(protocol::TaskAssign{"executor-job", "attempt", 1, 1, 1, "frame_####", "PNG"});
+    ASSERT_TRUE(harness.waitMessages(protocol::MessageType::FileErr));
+    EXPECT_EQ(requests, 0);
+    const std::lock_guard lock(harness.mutex);
+    EXPECT_TRUE(harness.files.empty());
+}
+TEST_F(BlenderTest, ExecutorPauseResumeAndCancellationNeverSendStaleResults) {
+    jobs::ExecutorOptions options;
+    options.directory = directory.path() / "executor";
+    options.blenderCache = cache;
+    ExecutorHarness harness(options, download);
+    harness.offer(directory.path() / "project.zip", "sleep.blend");
+    harness.message(protocol::TaskAssign{"executor-job", "attempt", 1, 1, 1, "frame_####", "PNG"});
+    ASSERT_TRUE(harness.state(jobs::ExecutorState::Rendering));
+    harness.message(protocol::JobPause{"executor-job"});
+    ASSERT_TRUE(harness.state(jobs::ExecutorState::Paused));
+    harness.message(
+        protocol::JobOffer{"queued-job", "Next job", "CYCLES", 1, 1, 1, 0, "4.2.1", "PNG"});
+    ASSERT_TRUE(harness.waitMessages(protocol::MessageType::JobAccept, 2));
+    harness.message(protocol::JobResume{"executor-job"});
+    ASSERT_TRUE(harness.state(jobs::ExecutorState::Rendering));
+    harness.message(protocol::TaskCancel{"executor-job", "attempt"});
+    ASSERT_TRUE(harness.state(jobs::ExecutorState::Cancelled));
+    const std::lock_guard lock(harness.mutex);
+    EXPECT_TRUE(harness.files.empty());
+    EXPECT_FALSE(harness.cancelledFiles.empty());
+}
+TEST_F(BlenderTest, ExecutorReturnsValidPartialFramesWithAnErrorReport) {
+    jobs::ExecutorOptions options;
+    options.directory = directory.path() / "executor";
+    options.blenderCache = cache;
+    ExecutorHarness harness(options, download);
+    harness.offer(directory.path() / "project.zip", "missing.blend");
+    harness.message(protocol::TaskAssign{"executor-job", "attempt", 1, 3, 1, "frame_####", "PNG"});
+    ASSERT_TRUE(harness.waitFiles(1));
+    const std::lock_guard lock(harness.mutex);
+    auto* zip = zip_open(harness.files.front().path.string().c_str(), ZIP_RDONLY, nullptr);
+    ASSERT_NE(zip, nullptr);
+    EXPECT_EQ(zip_get_num_entries(zip, 0), 2);
+    EXPECT_GE(zip_name_locate(zip, "blendnet-errors.json", 0), 0);
+    EXPECT_GE(zip_name_locate(zip, "frame_0001.png", 0), 0);
+    zip_discard(zip);
+}
+TEST_F(BlenderTest, ExecutorDisconnectInvalidatesTheLeaseAndFreshOfferCanRenderAgain) {
+    jobs::ExecutorOptions options;
+    options.directory = directory.path() / "executor";
+    options.blenderCache = cache;
+    ExecutorHarness harness(options, download);
+    harness.offer(directory.path() / "project.zip", "sleep.blend");
+    harness.message(
+        protocol::TaskAssign{"executor-job", "old_attempt", 1, 1, 1, "frame_####", "PNG"});
+    ASSERT_TRUE(harness.state(jobs::ExecutorState::Rendering));
+    harness.executor->handle(network::NetworkEvent{network::EventKind::Reconnecting});
+    ASSERT_TRUE(harness.state(jobs::ExecutorState::Cancelled));
+    harness.offer(directory.path() / "project.zip");
+    harness.message(
+        protocol::TaskAssign{"executor-job", "new_attempt", 1, 1, 1, "frame_####", "PNG"});
+    ASSERT_TRUE(harness.waitFiles(1));
+    const std::lock_guard lock(harness.mutex);
+    ASSERT_EQ(harness.files.size(), 1u);
+    EXPECT_EQ(harness.files.front().fileId, jobs::resultFileId("new_attempt"));
+}
+TEST_F(BlenderTest, ExecutorRejectsAssignmentOutsideAcceptedRange) {
+    jobs::ExecutorOptions options;
+    options.directory = directory.path() / "executor";
+    options.blenderCache = cache;
+    ExecutorHarness harness(options, download);
+    harness.offer(directory.path() / "project.zip");
+    harness.message(
+        protocol::TaskAssign{"executor-job", "forged_attempt", 1, 4, 1, "frame_####", "PNG"});
+    ASSERT_TRUE(harness.waitMessages(protocol::MessageType::FileErr));
+    EXPECT_EQ(requests, 0);
+    const std::lock_guard lock(harness.mutex);
+    EXPECT_TRUE(harness.files.empty());
+}
 TEST(BlenderMetadataTest, OfficialUrlsAndVersionValidation) {
     for (const auto* version : {"", "../4.2.1", "4.2", "4.2.1.exe", "04.2.1", "4.-2.1",
                                 "4.2.1/other", "4.2.1\n", "2.80.0"})

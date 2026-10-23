@@ -15,6 +15,7 @@ class ClientSocket {
     void stop();
     void updatePreferences(const protocol::ClientPrefs& preferences);
     void sendFile(const transfer::FileRequest& request);
+    void cancelFile(const std::string& fileId);
     void sendJobMessage(const protocol::Message& message);
     ClientSnapshot snapshot() const;
     std::vector<NetworkEvent> drainEvents();

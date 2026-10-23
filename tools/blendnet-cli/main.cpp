@@ -5,6 +5,7 @@
 #include "Version.h"
 #include "config/AppSettings.h"
 #include "config/Utf8Path.h"
+#include "jobs/JobExecutor.h"
 #include "jobs/SimulatedWorker.h"
 #include "log/Logger.h"
 
@@ -23,6 +24,7 @@ int run(int argc, char** argv) {
     std::optional<unsigned int> sourceIndex;
     unsigned int seconds = 0;
     bool simulateJobs = false, declineJobs = false;
+    bool executeJobs = false, keepJobs = false, exitAfterChunk = false;
     unsigned int frameDelay = 30;
     std::string machineName = "simulated-client";
     blendnet::cli::TransferArguments transferArguments;
@@ -42,6 +44,12 @@ int run(int argc, char** argv) {
             std::cout
                 << "  --simulate-jobs [--machine-name NAME] [--frame-delay-ms N] [--decline-jobs]\n"
                    "    P5 mock renderer: create 1x1 PNG result archives without Blender.\n";
+            std::cout
+                << "  --execute-jobs [--use-blender VERSION] [--keep-jobs] [--exit-after-chunk]\n"
+                   "    Accept source jobs and render with verified Blender (initial probe: "
+                   "4.2.1).\n"
+                   "    --keep-jobs preserves workspaces; otherwise remove results after final "
+                   "ACK.\n";
             return 0;
         }
         if (argument == "--version") {
@@ -54,6 +62,18 @@ int run(int argc, char** argv) {
         }
         if (argument == "--simulate-jobs") {
             simulateJobs = true;
+            continue;
+        }
+        if (argument == "--execute-jobs") {
+            executeJobs = true;
+            continue;
+        }
+        if (argument == "--keep-jobs") {
+            keepJobs = true;
+            continue;
+        }
+        if (argument == "--exit-after-chunk") {
+            exitAfterChunk = true;
             continue;
         }
         if (argument == "--decline-jobs") {
@@ -94,7 +114,10 @@ int run(int argc, char** argv) {
         }
     }
 
-    if (!transferArguments.valid() || (!sourceIndex && !transferArguments.file.path.empty()))
+    if (!transferArguments.valid() || (!sourceIndex && !transferArguments.file.path.empty()) ||
+        (executeJobs && (!sourceIndex || simulateJobs || declineJobs ||
+                         transferArguments.exitAfter || !transferArguments.file.path.empty())) ||
+        (exitAfterChunk && !executeJobs))
         return 2;
     if ((!blenderArguments.version.empty() &&
          blenderArguments.mode == blendnet::cli::BlenderArguments::Mode::None && !sourceIndex) ||
@@ -115,6 +138,8 @@ int run(int argc, char** argv) {
     }
     if (blenderArguments.mode != blendnet::cli::BlenderArguments::Mode::None)
         return blendnet::cli::runBlender(blenderArguments, settings, configPath);
+    if (executeJobs && blenderArguments.version.empty())
+        blenderArguments.version = "4.2.1";
     blendnet::Logger logger(std::clog, settings.logLevel);
     if (logger.log(blendnet::LogLevel::Info, "Headless settings check completed (P1)") !=
         blendnet::LogError::None) {
@@ -138,6 +163,11 @@ int run(int argc, char** argv) {
         options.transfers.directory = settings.workDirectory.is_absolute()
                                           ? settings.workDirectory
                                           : configPath.parent_path() / settings.workDirectory;
+    const auto workRoot = options.transfers.directory;
+    if (executeJobs) {
+        options.transfers.directory = workRoot / "transfers";
+        options.transfers.quotaDirectory = workRoot;
+    }
     options.gpu.backend = settings.computeBackend;
     options.gpu.benchmarkScore = settings.benchmarkScore;
     if (blenderArguments.backend)
@@ -176,6 +206,28 @@ int run(int argc, char** argv) {
     if (!transferArguments.file.path.empty())
         connection.sendFile(transferArguments.file);
     std::unique_ptr<blendnet::jobs::SimulatedWorker> simulation;
+    std::unique_ptr<blendnet::jobs::JobExecutor> executor;
+    if (executeJobs) {
+        blendnet::jobs::ExecutorOptions execution;
+        execution.directory = workRoot / "executor";
+        execution.quotaDirectory = workRoot;
+        execution.quotaBytes = options.transfers.quotaBytes;
+        execution.blenderCache = blenderArguments.cachePath(settings, configPath);
+        execution.backend = options.gpu.backend;
+        execution.threads = blenderArguments.render.threads;
+        execution.renderTimeout = blenderArguments.render.timeout;
+        execution.keepCompletedJobs = keepJobs || settings.keepCompletedJobs;
+        executor = std::make_unique<blendnet::jobs::JobExecutor>(
+            execution,
+            blendnet::jobs::JobExecutor::Callbacks{
+                [&connection](const blendnet::protocol::Message& message) {
+                    connection.sendJobMessage(message);
+                },
+                [&connection](const blendnet::transfer::FileRequest& file) {
+                    connection.sendFile(file);
+                },
+                [&connection](const std::string& fileId) { connection.cancelFile(fileId); }});
+    }
     if (simulateJobs)
         simulation = std::make_unique<blendnet::jobs::SimulatedWorker>(
             configPath.parent_path() / "simulation", std::chrono::milliseconds(frameDelay),
@@ -190,12 +242,15 @@ int run(int argc, char** argv) {
     bool ready = false;
     bool failed = false;
     bool transferDone = false;
+    bool chunkDone = false;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
     while (!blendnet::cli::interrupted &&
            (seconds == 0 || std::chrono::steady_clock::now() < deadline)) {
         for (const auto& event : connection.drainEvents()) {
             if (simulation)
                 simulation->handle(event);
+            if (executor)
+                executor->handle(event);
             if (simulation && event.kind == blendnet::network::EventKind::JobMessage &&
                 event.message &&
                 std::holds_alternative<blendnet::protocol::TaskAssign>(*event.message))
@@ -205,7 +260,7 @@ int run(int argc, char** argv) {
                 std::cout << "READY " << connection.snapshot().tlsVersion << '\n' << std::flush;
             } else if (event.kind == blendnet::network::EventKind::TransferProgress &&
                        event.transfer) {
-                if (!blendnet::cli::printTransfer(*event.transfer) && !simulateJobs)
+                if (!blendnet::cli::printTransfer(*event.transfer) && !simulateJobs && !executeJobs)
                     failed = true;
                 if (event.transfer->state == blendnet::transfer::TransferState::Completed)
                     transferDone = true;
@@ -216,7 +271,18 @@ int run(int argc, char** argv) {
                 std::cout << "RECONNECTING " << event.retryDelay.count() << " ms\n" << std::flush;
             }
         }
-        if (failed || (transferArguments.exitAfter && transferDone))
+        if (executor)
+            for (const auto& event : executor->drainEvents()) {
+                std::cout << "EXECUTOR " << blendnet::jobs::toString(event.state) << ' '
+                          << event.jobId << ' ' << event.chunkId << '\n'
+                          << std::flush;
+                if (event.state == blendnet::jobs::ExecutorState::Failed)
+                    std::cerr << "Executor: " << event.detail << '\n';
+                if (event.state == blendnet::jobs::ExecutorState::Completed)
+                    chunkDone = true;
+            }
+        if (failed || (transferArguments.exitAfter && transferDone) ||
+            (exitAfterChunk && chunkDone))
             break;
         if (connection.snapshot().state == blendnet::network::ConnectionState::Stopped)
             break;
@@ -232,6 +298,7 @@ int run(int argc, char** argv) {
     }
     simulation.reset();
     connection.stop();
+    executor.reset();
     return ready && !failed ? 0 : 1;
 }
 

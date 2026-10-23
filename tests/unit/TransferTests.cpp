@@ -68,6 +68,58 @@ TEST(TransferTest, StreamingRoundTripIncludesPartialLastBlockAndEmptyFile) {
         EXPECT_EQ(receiver.progress().path.extension(), ".zip");
     }
 }
+TEST(TransferTest, CompletedCleanupRequiresMatchingIdAndPreservesActiveTransfers) {
+    const test::TemporaryDirectory directory;
+    const auto file = directory.path() / "source.zip";
+    generate(file, 100);
+    TransferSender sender;
+    const auto offer = sender.prepare({file, "cleanup_PROJECT_ZIP"});
+    ASSERT_TRUE(offer);
+    TransferReceiver receiver({directory.path() / "received", {}}, "peer");
+    const auto reply = receiver.receive(*offer.value);
+    ASSERT_TRUE(reply);
+    auto part = receiver.progress().path;
+    part.replace_extension(".zip");
+    EXPECT_FALSE(removeCompletedTransfer(part, offer.value->fileId));
+    ASSERT_EQ(sender.acknowledge(std::get<protocol::FileAck>(*reply)), TransferError::None);
+    finish(sender, receiver);
+    const auto result = receiver.progress().path;
+    EXPECT_FALSE(removeCompletedTransfer(result, "wrong-id"));
+    EXPECT_TRUE(std::filesystem::exists(result));
+    EXPECT_TRUE(removeCompletedTransfer(result, offer.value->fileId));
+    EXPECT_FALSE(std::filesystem::exists(result));
+    auto metadata = result;
+    metadata.replace_extension(".json");
+    EXPECT_FALSE(std::filesystem::exists(metadata));
+}
+TEST(TransferTest, SharedQuotaIncludesWorkspaceAndDoesNotParseProjectJsonAsCheckpoints) {
+    const test::TemporaryDirectory directory;
+    const auto root = directory.path() / "work";
+    std::filesystem::create_directories(root / "executor/project");
+    test::writeFile(root / "executor/project/blendnet-project.json", "{}");
+    test::writeFile(root / "executor/project" / (std::string(64, 'a') + ".json"), "{}");
+    generate(root / "executor/frame.png", 1000);
+    generate(root / "executor/project/data.zip", 500);
+    test::writeFile(root / "executor/project/data.json", "{}");
+    const auto file = directory.path() / "source.zip";
+    generate(file, 100);
+    TransferSender sender;
+    const auto offer = sender.prepare({file, "quota_PROJECT_ZIP"});
+    ASSERT_TRUE(offer);
+    for (const auto quota : {1050, 1400}) {
+        TransferReceiver receiver({root / "transfers", std::uint64_t(quota), root}, "peer");
+        const auto reply = receiver.receive(*offer.value);
+        ASSERT_TRUE(reply);
+        ASSERT_TRUE(std::holds_alternative<protocol::FileErr>(*reply));
+        EXPECT_EQ(std::get<protocol::FileErr>(*reply).reason, "disk_full");
+    }
+    TransferReceiver receiver({root / "transfers", 2000, root}, "peer");
+    const auto reply = receiver.receive(*offer.value);
+    ASSERT_TRUE(reply);
+    ASSERT_TRUE(std::holds_alternative<protocol::FileAck>(*reply));
+    ASSERT_EQ(sender.acknowledge(std::get<protocol::FileAck>(*reply)), TransferError::None);
+    finish(sender, receiver);
+}
 TEST(TransferTest, RestartResumesOnlyWholeBlocksAndCompletedOffersAreIdempotent) {
     const test::TemporaryDirectory directory;
     const auto file = directory.path() / "source.zip";

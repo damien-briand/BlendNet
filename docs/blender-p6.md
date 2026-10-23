@@ -168,7 +168,8 @@ Il utilise `BLENDNET_BLENDER_TEST_VERSION` (4.2.1 par défaut) et
 peut télécharger Blender. Il vérifie un vrai chunk CPU de trois frames, un chunk
 avec pas de deux, les PNG, un backend absent, le benchmark sauvegardé et la connexion
 TLS avec la sonde réelle. Le rendu d'un job reçu, son extraction puis le renvoi de
-son ZIP résultat et le nettoyage automatique restent en P7. La popup de proposition
+son ZIP résultat et le nettoyage automatique sont raccordés dans le
+[client P7](client-p7.md). La popup de proposition
 du benchmark reste en P8.
 
 Sur l'environnement Ubuntu de validation, la libcurl système charge `libp11-kit`,

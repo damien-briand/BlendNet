@@ -84,7 +84,7 @@ La source peut fournir un callback `ServerOptions.localRenderer` pour rendre en
 dernier recours lorsqu'aucun client distant ne peut prendre le chunk. Ses résultats
 passent par la même validation. P5 le teste avec un renderer simulé ; le raccordement
 au vrai Blender s'appuie désormais sur les [services P6](blender-p6.md) ; l'exécution
-complète d'un job reçu sera raccordée en P7.
+complète d'un job reçu est raccordée dans le [client P7](client-p7.md).
 
 ## Validation des archives
 

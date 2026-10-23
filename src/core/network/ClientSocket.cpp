@@ -380,6 +380,14 @@ void ClientSocket::sendJobMessage(const protocol::Message& message) {
             impl->channel->send(message);
     });
 }
+void ClientSocket::cancelFile(const std::string& fileId) {
+    if (m_impl)
+        asio::post(m_impl->io, [impl = m_impl.get(), fileId] {
+            impl->pendingFiles.erase(fileId);
+            if (impl->transfers)
+                impl->transfers->cancelFile(fileId);
+        });
+}
 ClientSnapshot ClientSocket::snapshot() const {
     if (!m_impl)
         return {};

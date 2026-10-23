@@ -31,6 +31,7 @@ TEST(AppSettingsTest, RoundTripAndAtomicReplacement) {
     expected.computeBackend = "OPTIX";
     expected.logLevel = LogLevel::Debug;
     expected.benchmarkScore = 456;
+    expected.keepCompletedJobs = true;
     expected.workDirectory = std::filesystem::path(u8"projets/Scènes");
     expected.blenderCacheDirectory = "cache/blender";
     expected.knownSources = {
@@ -99,6 +100,8 @@ TEST(AppSettingsTest, InvalidTypesAndRangesPreserveState) {
         R"({"workDirectory":""})",
         R"({"workDirectory":"\u0000"})",
         R"({"blenderCacheDirectory":false})",
+        R"({"keepCompletedJobs":"yes"})",
+        R"({"keepCompletedJobs":1})",
         R"({"benchmarkScore":-1})",
         R"({"benchmarkScore":1.5})",
         R"({"benchmarkScore":18446744073709551615})",

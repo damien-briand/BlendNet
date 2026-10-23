@@ -133,6 +133,39 @@ TEST_F(TransferIntegration, SimultaneousBidirectionalStreamingAndFinalAcks) {
     EXPECT_EQ(sha256File(download->path).value, hash.value);
     EXPECT_EQ(client.snapshot().state, ConnectionState::Ready);
 }
+TEST_F(TransferIntegration, CancellingPreparedAndQueuedResultsDoesNotPoisonTheNextFile) {
+    const auto large = fixture(64);
+    const auto small = fixture(1);
+    connect();
+    client.sendFile({large, "cancelled_RESULT_ZIP", "RESULT_ZIP"});
+    client.sendFile({small, "queued_RESULT_ZIP", "RESULT_ZIP"});
+    client.cancelFile("queued_RESULT_ZIP");
+    ASSERT_TRUE(await([this] {
+        const auto values = client.snapshot().transfers;
+        return find(values, "cancelled_RESULT_ZIP", Direction::Sending, TransferState::Preparing) ||
+               find(values, "cancelled_RESULT_ZIP", Direction::Sending,
+                    TransferState::Transferring);
+    }));
+    client.cancelFile("cancelled_RESULT_ZIP");
+    client.sendFile({small, "next_RESULT_ZIP", "RESULT_ZIP"});
+    ASSERT_TRUE(await([this] {
+        return find(client.snapshot().transfers, "next_RESULT_ZIP", Direction::Sending,
+                    TransferState::Completed)
+            .has_value();
+    }));
+    ASSERT_TRUE(await([this] {
+        return find(client.snapshot().transfers, "cancelled_RESULT_ZIP", Direction::Sending,
+                    TransferState::Failed)
+            .has_value();
+    }));
+    EXPECT_FALSE(find(server.snapshot().transfers, "queued_RESULT_ZIP", Direction::Receiving,
+                      TransferState::Completed));
+    EXPECT_EQ(client.snapshot().state, ConnectionState::Ready);
+    const auto received = find(server.snapshot().transfers, "next_RESULT_ZIP", Direction::Receiving,
+                               TransferState::Completed);
+    ASSERT_TRUE(received);
+    EXPECT_EQ(sha256File(received->path).value, sha256File(small).value);
+}
 TEST_F(TransferIntegration, UploadResumesAfterReceiverServerIsDestroyedAndRecreated) {
     const auto file = fixture(128);
     connect();

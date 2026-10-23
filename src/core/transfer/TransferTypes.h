@@ -29,6 +29,8 @@ struct TransferOptions {
     // Vide : transferts désactivés. Chemin privé réservé exclusivement aux fichiers reçus.
     std::filesystem::path directory;
     std::optional<std::uint64_t> quotaBytes;
+    // Optional common root, including executor workspaces, for the disk budget.
+    std::filesystem::path quotaDirectory{};
 };
 struct FileRequest {
     std::filesystem::path path{};

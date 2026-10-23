@@ -147,7 +147,8 @@ void atomicJson(const std::filesystem::path& path, const Json& data) {
 std::uint64_t sizeOrZero(const std::filesystem::path& path) {
     return std::filesystem::exists(path) ? std::filesystem::file_size(path) : 0;
 }
-std::uint64_t bookedBytes(const std::filesystem::path& directory) {
+std::uint64_t bookedBytes(const std::filesystem::path& directory,
+                          const std::filesystem::path& checkpointDirectory) {
     std::uint64_t booked = 0;
     const auto add = [&booked](std::uint64_t value) {
         if (value > UINT64_MAX - booked)
@@ -158,7 +159,12 @@ std::uint64_t bookedBytes(const std::filesystem::path& directory) {
         if (entry.is_symlink() || !entry.is_regular_file())
             continue;
         const auto path = entry.path();
-        if (path.extension() == ".json") {
+        const auto stem = path.stem().string();
+        const bool checkpoint = path.parent_path() == checkpointDirectory && stem.size() == 64 &&
+                                std::all_of(stem.begin(), stem.end(), [](char c) {
+                                    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+                                });
+        if (path.extension() == ".json" && checkpoint) {
             const auto offer = readOffer(readJson(path));
             auto part = path;
             part.replace_extension(".part");
@@ -169,7 +175,7 @@ std::uint64_t bookedBytes(const std::filesystem::path& directory) {
             if (partBytes > UINT64_MAX - finalBytes)
                 throw std::runtime_error("Quota overflow");
             add(std::max(offer.totalBytes, partBytes + finalBytes));
-        } else if (path.extension() == ".part" || path.extension() == ".zip") {
+        } else if (checkpoint && (path.extension() == ".part" || path.extension() == ".zip")) {
             auto metadata = path;
             metadata.replace_extension(".json");
             if (!std::filesystem::exists(metadata))
@@ -238,6 +244,26 @@ TransferResult<std::string> sha256File(const std::filesystem::path& path,
 }
 bool isFileMessage(const protocol::Message& message) {
     return static_cast<unsigned int>(protocol::ProtocolCodec::typeOf(message)) >= 30;
+}
+bool removeCompletedTransfer(const std::filesystem::path& path, const std::string& fileId) {
+    try {
+        const std::lock_guard lock(storeMutex);
+        auto metadata = path;
+        metadata.replace_extension(".json");
+        if (path.extension() != ".zip" || symlink(path) || symlink(metadata) ||
+            leases.contains(metadata))
+            return false;
+        const auto state = readJson(metadata);
+        const auto offer = readOffer(state);
+        if (state.at("complete") != true || offer.fileId != fileId ||
+            std::filesystem::file_size(path) != offer.totalBytes)
+            return false;
+        std::filesystem::remove(path);
+        std::filesystem::remove(metadata);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
 }
 
 struct TransferReceiver::Impl {
@@ -360,12 +386,14 @@ struct TransferReceiver::Impl {
             } else if (std::filesystem::exists(part) || std::filesystem::exists(final)) {
                 return protocol::FileErr{offer.fileId, "aborted"};
             }
-            const auto booked = bookedBytes(options.directory);
+            const auto quotaRoot =
+                options.quotaDirectory.empty() ? options.directory : options.quotaDirectory;
+            const auto booked = bookedBytes(quotaRoot, options.directory);
             const auto additional = existing ? 0 : offer.totalBytes;
             if (options.quotaBytes &&
                 (booked > *options.quotaBytes || additional > *options.quotaBytes - booked))
                 return protocol::FileErr{offer.fileId, "disk_full"};
-            const auto used = presentBytes(options.directory);
+            const auto used = presentBytes(quotaRoot);
             const auto reserved = booked - std::min(booked, used);
             const auto available = std::filesystem::space(options.directory).available;
             if (additional > available || reserved > available - additional)

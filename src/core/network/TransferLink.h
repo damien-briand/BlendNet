@@ -13,6 +13,7 @@ class TransferLink : public std::enable_shared_from_this<TransferLink> {
                  std::string peerScope, std::function<void(transfer::TransferProgress)> onProgress);
     bool handle(protocol::Message message);
     void sendFile(transfer::FileRequest request);
+    void cancelFile(const std::string& fileId);
     void stop();
 
   private:

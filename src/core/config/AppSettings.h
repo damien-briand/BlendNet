@@ -42,6 +42,7 @@ struct AppSettings {
     std::filesystem::path workDirectory = "jobs";
     std::filesystem::path blenderCacheDirectory = "blender-cache";
     std::optional<int> benchmarkScore;
+    bool keepCompletedJobs = false;
     std::vector<KnownSource> knownSources;
 
     bool operator==(const AppSettings&) const = default;

@@ -6,5 +6,6 @@
     "workDirectory": "jobs",
     "blenderCacheDirectory": "blender-cache",
     "benchmarkScore": null,
+    "keepCompletedJobs": false,
     "knownSources": []
 }

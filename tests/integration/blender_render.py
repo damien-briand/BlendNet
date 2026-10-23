@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import zlib
+import zipfile
 
 from cli_transfer import Process
 
@@ -81,6 +82,44 @@ def main():
             assert token not in connected.stdout + connected.stderr
         finally:
             source.stop()
+        # P7: a real source transfers a project, assigns two chunks, validates the returned ZIPs.
+        with zipfile.ZipFile(root / "project.zip", "w", compression=zipfile.ZIP_DEFLATED) as project:
+            project.write(smoke / "scene.blend", "scenes/main.blend")
+            project.writestr("textures/reference.txt", "relative dependencies are preserved")
+            project.writestr("blendnet-project.json", json.dumps({"schemaVersion": 1, "blendPath": "scenes/main.blend"}))
+        (root / "job.json").write_text(json.dumps({"id": "real-p7", "projectName": "Real Blender P7",
+            "projectZip": "project.zip", "outputDirectory": "network-output", "blenderVersion": version,
+            "frameStart": 1, "frameEnd": 3, "chunkSize": 2, "engine": "CYCLES", "outputFormat": "PNG"}))
+        source = Process([server, "--identity-dir", str(identity), "--port", "0", "--seconds", "240",
+                          "--publish-job", str(root / "job.json"), "--wait-clients", "1", "--exit-after-job"])
+        worker = None
+        try:
+            port = int(source.until(lambda line: line.startswith("LISTENING ")).split()[1])
+            stored["knownSources"][0]["port"] = port
+            stored["knownSources"][0]["certificateSha256"] = None
+            settings.write_text(json.dumps(stored))
+            worker = Process(base + ["--connect", "0", "--execute-jobs", "--use-blender", version,
+                                     "--backend", "CPU", "--seconds", "240"])
+            done = source.until(lambda line: line.startswith("JOB Done "))
+            assert done.split()[2:4] == ["3", "3"], done
+            assert source.process.wait(timeout=5) == 0, "".join(source.errors)
+            for _ in range(2):
+                worker.until(lambda line: line.startswith("EXECUTOR completed "))
+            assert sum(line.strip() == "TRANSFER_DONE RECEIVE" for line in worker.output) == 1
+            assert all(png(path) == (32, 32) for path in (root / "network-output").glob("*.png"))
+            assert len(list((root / "network-output").glob("*.png"))) == 3
+            workspace = root / stored["workDirectory"] / "executor"
+            assert not list(workspace.rglob("*.blend")), "Extracted projects were retained after ACK"
+            assert not list(workspace.rglob("*.png")), "Rendered frames were retained after ACK"
+            assert not list(workspace.rglob("result.zip")), "Result archive was retained after ACK"
+        finally:
+            if worker:
+                worker.stop()
+                assert token not in "".join(worker.output + worker.errors)
+            source.stop()
+        assert not list((root / stored["workDirectory"] / "transfers").glob("*.zip")), "Session project cache was retained"
+        assert not list((root / stored["workDirectory"] / "transfers").glob("*.json")), "Completed checkpoint was retained"
+        print("P7: TLS project -> secure extraction -> real Blender -> two result ZIPs -> 3/3 verified PNG -> ACK cleanup")
         print(f"P6: real Blender {version}; 3/3 PNG 32x32; stepped chunk; benchmark {score}; real GPU_INFO over TLS")
 
 
