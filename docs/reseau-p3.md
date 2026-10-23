@@ -109,7 +109,7 @@ configurer la redirection du port TCP sur le routeur. Il n'y a pas de découvert
 de relais ni d'UPnP.
 
 Les caractéristiques GPU de la CLI sont **simulées** en P3 : backend et score viennent
-de la configuration, sans lancer Blender. La détection réelle est prévue en P6 et
+de la configuration, sans lancer Blender. La [détection réelle est disponible en P6](blender-p6.md) avec `--use-blender` et
 les commandes graphiques en P8. Le [transfert des fichiers est disponible en P4](transfert-p4.md) ;
 les [jobs et clients simulés sont disponibles en P5](jobs-p5.md).
 

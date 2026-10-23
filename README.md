@@ -22,8 +22,12 @@ du récepteur.
 La phase **P5** ajoute les jobs, le découpage en chunks, l'éligibilité des clients,
 l'attribution et la redistribution après échec, ainsi que la validation et l'assemblage
 des résultats. La [démo des jobs P5](docs/jobs-p5.md) utilise trois clients simulés et
-supporte la perte d'un client pendant son chunk. Le vrai rendu Blender vient en P6/P7 ;
-les vues graphiques viennent en P8.
+supporte la perte d'un client pendant son chunk.
+
+La phase **P6** ajoute l'installation de Blender vérifiée par SHA-256, la sonde réelle
+des backends, le rendu local annulable et le benchmark persisté. La
+[démo Blender P6](docs/blender-p6.md) rend un vrai chunk de trois frames en CPU.
+Le client complet qui exécute les jobs réseau vient en P7 ; les vues graphiques en P8.
 
 Références : [cahier des charges](docs/cahier-des-charges-blendnet.md) et
 [phases P1 à P9](docs/blendnet-spécification-agent-ia-guide-developpement.md).
@@ -35,13 +39,15 @@ Le réseau requiert les en-têtes **Asio standalone** et **OpenSSL ≥ 1.1.1**. 
 OpenGL 3.3 et GLFW. Les ZIP requièrent Zlib ; CMake utilise libzip, nlohmann/json, GLFW et GoogleTest installés
 quand ils sont disponibles, et télécharge les dépendances manquantes depuis GitHub.
 Dear ImGui est téléchargé à une version fixe.
+P6 requiert aussi **libcurl ≥ 7.85** ; reproc installé est utilisé, ou téléchargé
+à une version fixe. L'installation de Blender sous Linux utilise `tar` et `xz`.
 
 ### Linux (Debian / Ubuntu, backend X11)
 
 ```sh
 sudo apt install build-essential cmake git libgl1-mesa-dev \
     libglfw3-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-    libasio-dev libssl-dev zlib1g-dev
+    libasio-dev libssl-dev zlib1g-dev libcurl4-openssl-dev tar xz-utils
 ./build.sh
 ./build/blendnet
 ```
@@ -121,6 +127,7 @@ FetchContent : `-DFETCHCONTENT_SOURCE_DIR_JSON=/chemin/json`,
 `-DFETCHCONTENT_SOURCE_DIR_IMGUI=/chemin/imgui` et
 `-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=/chemin/googletest`. Le dépôt ne contient pas ces sources.
 Pour libzip : `-DFETCHCONTENT_SOURCE_DIR_LIBZIP=/chemin/libzip` (ou installer `libzip-dev`).
+Pour reproc : `-DFETCHCONTENT_SOURCE_DIR_REPROC=/chemin/reproc`.
 
 ## Configuration et journal
 
@@ -139,8 +146,10 @@ Emplacements par défaut :
 Sans répertoire utilisateur disponible, le repli est `.blendnet/settings.json`.
 Le [fichier d'exemple](docs/settings.example.json) montre les champs du socle. Les chemins
 de travail sert désormais à la réception des fichiers côté client ; le cache sera utilisé
-dans les phases suivantes. Aucun rendu n'est encore lancé.
-Le backend par défaut est `CPU` ; la détection des backends disponibles viendra en P6.
+dans les phases suivantes. Le rendu local est disponible avec `--render-local` ;
+le rendu des jobs reçus sera raccordé en P7.
+Le backend par défaut est `CPU` ; `--probe-blender` détecte les backends disponibles
+et `--benchmark-blender` enregistre un score volontairement.
 
 Le journal de la GUI est écrit dans `logs/blendnet.log`, à côté de la configuration,
 ainsi que sur stderr. La CLI journalise sur stderr. Les lignes sont horodatées en UTC ;

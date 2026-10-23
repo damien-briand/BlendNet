@@ -10,6 +10,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(BLENDNET_BUILD_GUI "Build the desktop application" ON)
 option(BLENDNET_TEST_GUI "Register a GUI smoke test (requires a display and OpenGL 3.3)" OFF)
 option(BLENDNET_TEST_LARGE_TRANSFERS "Register the 1 GiB ZIP transfer/resume test" OFF)
+option(BLENDNET_TEST_BLENDER "Register the real Blender CPU render/benchmark test (downloads Blender if absent)" OFF)
+set(BLENDNET_BLENDER_TEST_VERSION "4.2.1" CACHE STRING "Official Blender version used by the optional integration test")
+set(BLENDNET_BLENDER_TEST_CACHE "${PROJECT_SOURCE_DIR}/.cache/blender" CACHE PATH "Verified Blender cache for the optional integration test")
 
 include(FetchContent)
 include(CTest)
@@ -18,6 +21,19 @@ find_package(Threads REQUIRED)
 find_package(OpenSSL 1.1.1 REQUIRED)
 find_path(ASIO_INCLUDE_DIR asio.hpp REQUIRED)
 find_package(ZLIB REQUIRED) # Dépendance de libzip, CRC des images PNG.
+find_package(CURL 7.85 REQUIRED)
+
+find_package(reproc 14.2 CONFIG QUIET)
+if(NOT TARGET reproc)
+    set(REPROC++ OFF CACHE BOOL "" FORCE)
+    set(REPROC_TEST OFF CACHE BOOL "" FORCE)
+    set(REPROC_EXAMPLES OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(reproc
+        GIT_REPOSITORY https://github.com/DaanDeMeyer/reproc.git
+        GIT_TAG 3179928ae7b085e41dfb846d987519fa7c12ffb3 # v14.2.5
+    )
+    FetchContent_MakeAvailable(reproc)
+endif()
 
 # RF-43/53 : archives de résultats, dépendance de la stack contractuelle.
 find_package(libzip 1.7 CONFIG QUIET)
@@ -84,6 +100,13 @@ add_library(blendnet-core STATIC
     src/core/jobs/ResultAssembler.cpp
     src/core/jobs/SimulatedWorker.cpp
     src/core/jobs/JobFile.cpp
+    src/core/blender/BlenderTypes.cpp
+    src/core/blender/Process.cpp
+    src/core/blender/BlenderInstaller.cpp
+    src/core/blender/HttpDownload.cpp
+    src/core/blender/GpuInfoService.cpp
+    src/core/blender/RenderProcess.cpp
+    src/core/blender/Benchmark.cpp
 )
 target_include_directories(blendnet-core PUBLIC
     "${PROJECT_SOURCE_DIR}/src/core"
@@ -92,6 +115,7 @@ target_include_directories(blendnet-core PUBLIC
 target_link_libraries(blendnet-core
     PUBLIC Threads::Threads
     PRIVATE nlohmann_json::nlohmann_json OpenSSL::SSL OpenSSL::Crypto libzip::zip ZLIB::ZLIB
+        CURL::libcurl reproc ${CMAKE_DL_LIBS}
 )
 target_include_directories(blendnet-core SYSTEM PRIVATE "${ASIO_INCLUDE_DIR}")
 target_compile_definitions(blendnet-core PRIVATE ASIO_STANDALONE)
@@ -212,12 +236,17 @@ if(BUILD_TESTING)
         tests/unit/NetworkTests.cpp
         tests/unit/TransferTests.cpp
         tests/unit/JobTests.cpp
+        tests/unit/BlenderTests.cpp
     )
     target_include_directories(blendnet-tests PRIVATE "${PROJECT_SOURCE_DIR}/tests")
     target_link_libraries(blendnet-tests PRIVATE
         blendnet-core GTest::gtest_main nlohmann_json::nlohmann_json libzip::zip ZLIB::ZLIB
     )
     blendnet_warnings(blendnet-tests)
+    add_executable(blendnet-fake-blender tests/helpers/FakeBlender.cpp)
+    blendnet_warnings(blendnet-fake-blender)
+    target_compile_definitions(blendnet-tests PRIVATE BLENDNET_FAKE_BLENDER_PATH="$<TARGET_FILE:blendnet-fake-blender>")
+    add_dependencies(blendnet-tests blendnet-fake-blender)
 
     add_test(NAME blendnet-unit COMMAND blendnet-tests)
     add_executable(blendnet-network-tests tests/integration/NetworkTests.cpp)
@@ -258,6 +287,13 @@ if(BUILD_TESTING)
             "${PROJECT_SOURCE_DIR}/tests/integration/cli_jobs.py"
             "$<TARGET_FILE:blendnet-server-cli>" "$<TARGET_FILE:blendnet-cli>")
         set_tests_properties(blendnet-cli-jobs PROPERTIES TIMEOUT 45)
+        if(BLENDNET_TEST_BLENDER)
+            add_test(NAME blendnet-blender-real COMMAND "${Python3_EXECUTABLE}"
+                "${PROJECT_SOURCE_DIR}/tests/integration/blender_render.py"
+                "$<TARGET_FILE:blendnet-cli>" "$<TARGET_FILE:blendnet-server-cli>"
+                "${BLENDNET_BLENDER_TEST_VERSION}" "${BLENDNET_BLENDER_TEST_CACHE}")
+            set_tests_properties(blendnet-blender-real PROPERTIES TIMEOUT 900 LABELS blender)
+        endif()
         if(BLENDNET_TEST_LARGE_TRANSFERS)
             add_test(NAME blendnet-transfer-large COMMAND "${Python3_EXECUTABLE}"
                 "${PROJECT_SOURCE_DIR}/tests/integration/cli_transfer.py"

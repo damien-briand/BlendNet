@@ -1,3 +1,4 @@
+#include "../common/BlenderCli.h"
 #include "../common/Cli.h"
 #include "../common/TransferCli.h"
 #include "SourceConnection.h"
@@ -25,6 +26,7 @@ int run(int argc, char** argv) {
     unsigned int frameDelay = 30;
     std::string machineName = "simulated-client";
     blendnet::cli::TransferArguments transferArguments;
+    blendnet::cli::BlenderArguments blenderArguments;
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument(argv[index]);
         if (argument == "--help") {
@@ -36,6 +38,7 @@ int run(int argc, char** argv) {
                    "  --connect INDEX  Connect to a known source (zero-based index).\n"
                    "  --seconds N  Exit after N seconds (0: wait for Ctrl+C).\n";
             std::cout << blendnet::cli::transferHelp;
+            std::cout << blendnet::cli::blenderHelp;
             std::cout
                 << "  --simulate-jobs [--machine-name NAME] [--frame-delay-ms N] [--decline-jobs]\n"
                    "    P5 mock renderer: create 1x1 PNG result archives without Blender.\n";
@@ -81,6 +84,8 @@ int run(int argc, char** argv) {
             seconds = *duration;
         } else if (argument == "--init-config") {
             initialize = true;
+        } else if (index + 1 < argc && blenderArguments.consume(argument, argv[index + 1])) {
+            ++index;
         } else if (index + 1 < argc && transferArguments.consume(argument, argv[index + 1])) {
             ++index;
         } else {
@@ -90,6 +95,10 @@ int run(int argc, char** argv) {
     }
 
     if (!transferArguments.valid() || (!sourceIndex && !transferArguments.file.path.empty()))
+        return 2;
+    if ((!blenderArguments.version.empty() &&
+         blenderArguments.mode == blendnet::cli::BlenderArguments::Mode::None && !sourceIndex) ||
+        (blenderArguments.mode != blendnet::cli::BlenderArguments::Mode::None && sourceIndex))
         return 2;
     blendnet::AppSettings settings;
     const auto loaded = blendnet::AppSettings::load(configPath, settings);
@@ -104,6 +113,8 @@ int run(int argc, char** argv) {
             return 1;
         }
     }
+    if (blenderArguments.mode != blendnet::cli::BlenderArguments::Mode::None)
+        return blendnet::cli::runBlender(blenderArguments, settings, configPath);
     blendnet::Logger logger(std::clog, settings.logLevel);
     if (logger.log(blendnet::LogLevel::Info, "Headless settings check completed (P1)") !=
         blendnet::LogError::None) {
@@ -129,6 +140,28 @@ int run(int argc, char** argv) {
                                           : configPath.parent_path() / settings.workDirectory;
     options.gpu.backend = settings.computeBackend;
     options.gpu.benchmarkScore = settings.benchmarkScore;
+    if (blenderArguments.backend)
+        options.gpu.backend = *blenderArguments.backend;
+    if (!blenderArguments.version.empty()) {
+        blendnet::cli::handleSignals();
+        blendnet::cli::BlenderCancellation control;
+        blendnet::blender::BlenderInstaller installer(
+            blenderArguments.cachePath(settings, configPath));
+        const auto binary = installer.ensureVersion(blenderArguments.version, &control.cancelled);
+        if (!binary) {
+            std::cerr << blendnet::blender::toString(binary.error) << '\n';
+            return 1;
+        }
+        const auto hardware = blendnet::blender::GpuInfoService::probe(
+            *binary.value, options.gpu.backend, &control.cancelled);
+        if (!hardware) {
+            std::cerr << blendnet::blender::toString(hardware.error) << '\n';
+            return 1;
+        }
+        options.gpu = hardware.value->gpu;
+        if (settings.computeBackend == options.gpu.backend)
+            options.gpu.benchmarkScore = settings.benchmarkScore;
+    }
 #ifdef _WIN32
     options.gpu.os = "windows";
 #elif defined(__APPLE__)

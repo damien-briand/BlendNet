@@ -1,0 +1,5 @@
+# Opt-in only. Ubuntu's system libcurl loads libp11-kit via its dependencies.
+# The p11-kit initializer allocates a locale (46 bytes in this environment).
+# Reproduced with an empty int main() linked to system libcurl under ASan.
+# Keep all BlendNet allocations and the rest of LeakSanitizer enabled.
+leak:libp11-kit.so.0

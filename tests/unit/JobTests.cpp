@@ -171,7 +171,7 @@ TEST(JobSchedulerTest, ProgressIsNotProofOfCompletionAndAssemblyIsRequired) {
     ASSERT_TRUE(scheduler.start("job", id, "a"));
     EXPECT_FALSE(scheduler.progress({"job", id, 2, 2, 2, 100.0, {}}, "b"));
     EXPECT_TRUE(scheduler.progress({"job", id, 2, 2, 2, 100.0, {}}, "a"));
-    EXPECT_FALSE(scheduler.progress({"job", id, 2, 2, 2, 100.0, {}}, "a"));
+    EXPECT_TRUE(scheduler.progress({"job", id, 2, 2, 2, 100.0, {}}, "a"));
     EXPECT_EQ(scheduler.find("job")->validFrames, 0);
     EXPECT_EQ(scheduler.find("job")->job.state, Job::State::Rendering);
     EXPECT_FALSE(scheduler.complete("job", id, "a", frames(1, 1)));

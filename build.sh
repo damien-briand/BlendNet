@@ -37,7 +37,7 @@ fi
 if [[ -n "$backup_dir" ]]; then
     # Les sources FetchContent sont indépendantes du générateur ; les sous-builds
     # et leurs caches restent dans la sauvegarde et ne sont pas réutilisés.
-    for dependency in JSON:json IMGUI:imgui GLFW:glfw GOOGLETEST:googletest LIBZIP:libzip; do
+    for dependency in JSON:json IMGUI:imgui GLFW:glfw GOOGLETEST:googletest LIBZIP:libzip REPROC:reproc; do
         dependency_name="${dependency%%:*}"
         dependency_source="$backup_dir/build/_deps/${dependency#*:}-src"
         if [[ -f "$dependency_source/CMakeLists.txt" ]] ||
@@ -46,6 +46,8 @@ if [[ -n "$backup_dir" ]]; then
         fi
     done
 fi
+
+rm -rf "$build_dir"/*
 
 # CMake crée build/ si nécessaire et conserve le cache pour les compilations suivantes.
 cmake "${configure_args[@]}" "$@"

@@ -275,6 +275,18 @@ bool ResultAssembler::assemble(const Job& job, const std::map<int, ValidatedFram
         return false;
     }
 }
+std::optional<ValidatedFrame> ResultAssembler::inspect(int frame, const std::filesystem::path& path,
+                                                       std::string_view format,
+                                                       const std::atomic_bool* cancelled) {
+    try {
+        const auto [width, height] = dimensions(path, format, cancelled);
+        if (!width || !height)
+            return {};
+        return ValidatedFrame{frame, path, width, height};
+    } catch (const std::exception&) {
+        return {};
+    }
+}
 bool ResultAssembler::simulatedResult(const protocol::TaskAssign& task,
                                       const std::filesystem::path& archive) {
     // PNG 1x1 complet ; le simulateur supporte PNG, les formats Blender restent en P6/P7.

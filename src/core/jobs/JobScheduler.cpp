@@ -101,8 +101,8 @@ bool JobScheduler::progress(const protocol::Progress& progress, std::string_view
         (std::int64_t(progress.currentFrame) - range.start) % range.step != 0 ||
         std::abs(progress.percent - 100.0 * progress.framesDone / progress.framesTotal) > 0.01)
         return false;
-    if (progress.framesDone == chunk->framesDone && chunk->state != Chunk::State::Assigned)
-        return false; // Une répétition ne maintient pas indéfiniment une tâche bloquée.
+    // Une frame peut durer plusieurs minutes : accepter le heartbeat P6, sans
+    // compter cette télémétrie comme une preuve de résultat (RNF-03).
     chunk->framesDone = progress.framesDone;
     chunk->state = progress.framesDone == progress.framesTotal ? Chunk::State::Uploading
                                                                : Chunk::State::Rendering;
