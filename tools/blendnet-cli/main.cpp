@@ -4,6 +4,7 @@
 #include "Version.h"
 #include "config/AppSettings.h"
 #include "config/Utf8Path.h"
+#include "jobs/SimulatedWorker.h"
 #include "log/Logger.h"
 
 #include <chrono>
@@ -20,6 +21,9 @@ int run(int argc, char** argv) {
     bool initialize = false;
     std::optional<unsigned int> sourceIndex;
     unsigned int seconds = 0;
+    bool simulateJobs = false, declineJobs = false;
+    unsigned int frameDelay = 30;
+    std::string machineName = "simulated-client";
     blendnet::cli::TransferArguments transferArguments;
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument(argv[index]);
@@ -32,6 +36,9 @@ int run(int argc, char** argv) {
                    "  --connect INDEX  Connect to a known source (zero-based index).\n"
                    "  --seconds N  Exit after N seconds (0: wait for Ctrl+C).\n";
             std::cout << blendnet::cli::transferHelp;
+            std::cout
+                << "  --simulate-jobs [--machine-name NAME] [--frame-delay-ms N] [--decline-jobs]\n"
+                   "    P5 mock renderer: create 1x1 PNG result archives without Blender.\n";
             return 0;
         }
         if (argument == "--version") {
@@ -40,6 +47,25 @@ int run(int argc, char** argv) {
         }
         if (argument == "--exit-after-transfer") {
             transferArguments.exitAfter = true;
+            continue;
+        }
+        if (argument == "--simulate-jobs") {
+            simulateJobs = true;
+            continue;
+        }
+        if (argument == "--decline-jobs") {
+            declineJobs = true;
+            continue;
+        }
+        if (argument == "--machine-name" && index + 1 < argc) {
+            machineName = argv[++index];
+            continue;
+        }
+        if (argument == "--frame-delay-ms" && index + 1 < argc) {
+            const auto delay = blendnet::cli::number(argv[++index], 60000);
+            if (!delay)
+                return 2;
+            frameDelay = *delay;
             continue;
         }
         if (argument == "--config" && index + 1 < argc) {
@@ -94,6 +120,7 @@ int run(int argc, char** argv) {
     }
     blendnet::network::ClientOptions options;
     options.source = settings.knownSources[*sourceIndex];
+    options.machineName = machineName;
     options.settingsPath = configPath;
     options.transfers = transferArguments.storage;
     if (options.transfers.directory.empty())
@@ -115,6 +142,17 @@ int run(int argc, char** argv) {
     }
     if (!transferArguments.file.path.empty())
         connection.sendFile(transferArguments.file);
+    std::unique_ptr<blendnet::jobs::SimulatedWorker> simulation;
+    if (simulateJobs)
+        simulation = std::make_unique<blendnet::jobs::SimulatedWorker>(
+            configPath.parent_path() / "simulation", std::chrono::milliseconds(frameDelay),
+            [&connection](const blendnet::protocol::Message& message) {
+                connection.sendJobMessage(message);
+            },
+            [&connection](const blendnet::transfer::FileRequest& file) {
+                connection.sendFile(file);
+            },
+            declineJobs);
     blendnet::cli::handleSignals();
     bool ready = false;
     bool failed = false;
@@ -123,12 +161,18 @@ int run(int argc, char** argv) {
     while (!blendnet::cli::interrupted &&
            (seconds == 0 || std::chrono::steady_clock::now() < deadline)) {
         for (const auto& event : connection.drainEvents()) {
+            if (simulation)
+                simulation->handle(event);
+            if (simulation && event.kind == blendnet::network::EventKind::JobMessage &&
+                event.message &&
+                std::holds_alternative<blendnet::protocol::TaskAssign>(*event.message))
+                std::cout << "SIM_TASK_STARTED\n" << std::flush;
             if (event.kind == blendnet::network::EventKind::Ready) {
                 ready = true;
                 std::cout << "READY " << connection.snapshot().tlsVersion << '\n' << std::flush;
             } else if (event.kind == blendnet::network::EventKind::TransferProgress &&
                        event.transfer) {
-                if (!blendnet::cli::printTransfer(*event.transfer))
+                if (!blendnet::cli::printTransfer(*event.transfer) && !simulateJobs)
                     failed = true;
                 if (event.transfer->state == blendnet::transfer::TransferState::Completed)
                     transferDone = true;
@@ -153,6 +197,7 @@ int run(int argc, char** argv) {
             std::cerr << blendnet::network::toString(finalState.error) << '\n';
         failed = true;
     }
+    simulation.reset();
     connection.stop();
     return ready && !failed ? 0 : 1;
 }

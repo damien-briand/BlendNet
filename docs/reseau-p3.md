@@ -111,7 +111,7 @@ de relais ni d'UPnP.
 Les caractéristiques GPU de la CLI sont **simulées** en P3 : backend et score viennent
 de la configuration, sans lancer Blender. La détection réelle est prévue en P6 et
 les commandes graphiques en P8. Le [transfert des fichiers est disponible en P4](transfert-p4.md) ;
-les jobs viennent en P5.
+les [jobs et clients simulés sont disponibles en P5](jobs-p5.md).
 
 ## Tests
 

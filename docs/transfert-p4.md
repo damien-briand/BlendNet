@@ -131,8 +131,9 @@ Pour envoyer un projet dans l'autre sens, ajouter au lancement de la source :
 
 Lancer alors le client sans `--send-file`. Les deux outils acceptent
 `--quota-bytes N` pour limiter leur réception. Les octets des archives sont transportés
-tels quels : la création et l'extraction sécurisée des ZIP seront intégrées aux jobs
-dans les phases suivantes.
+tels quels. P5 ajoute la création des résultats simulés et leur validation/extraction
+avec libzip dans les [jobs](jobs-p5.md). L'archivage complet des projets Blender et
+l'exécution réelle restent prévus dans les phases suivantes.
 
 ## Validation
 

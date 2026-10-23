@@ -252,7 +252,15 @@ struct ClientSocket::Impl {
             ++state.pongsReceived;
         } else if (std::holds_alternative<protocol::ClientKick>(message))
             channel->close(NetworkError::Kicked);
-        else if (!transfers || !transfers->handle(std::move(message)))
+        else if (std::holds_alternative<protocol::JobOffer>(message) ||
+                 std::holds_alternative<protocol::TaskAssign>(message) ||
+                 std::holds_alternative<protocol::TaskCancel>(message) ||
+                 std::holds_alternative<protocol::JobPause>(message) ||
+                 std::holds_alternative<protocol::JobResume>(message)) {
+            NetworkEvent event{EventKind::JobMessage};
+            event.message = std::move(message);
+            events.push(std::move(event));
+        } else if (!transfers || !transfers->handle(std::move(message)))
             channel->close(NetworkError::ProtocolViolation);
     }
     void tick() {
@@ -358,6 +366,19 @@ void ClientSocket::updatePreferences(const protocol::ClientPrefs& preferences) {
 void ClientSocket::sendFile(const transfer::FileRequest& request) {
     if (m_impl)
         asio::post(m_impl->io, [impl = m_impl.get(), request] { impl->offerFile(request); });
+}
+void ClientSocket::sendJobMessage(const protocol::Message& message) {
+    if (!m_impl)
+        return;
+    asio::post(m_impl->io, [impl = m_impl.get(), message] {
+        if (!impl->channel || impl->awaitingHello || impl->stopping)
+            return;
+        if (std::holds_alternative<protocol::JobAccept>(message) ||
+            std::holds_alternative<protocol::JobDecline>(message) ||
+            std::holds_alternative<protocol::Progress>(message) ||
+            std::holds_alternative<protocol::FileErr>(message))
+            impl->channel->send(message);
+    });
 }
 ClientSnapshot ClientSocket::snapshot() const {
     if (!m_impl)

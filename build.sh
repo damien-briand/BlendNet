@@ -18,14 +18,26 @@ if [[ -f "$build_dir/CMakeCache.txt" ]]; then
     done < "$build_dir/CMakeCache.txt"
 fi
 
+backup_dir=""
 if [[ -n "$previous_generator" && "$previous_generator" != "Unix Makefiles" ]]; then
     backup_dir="$(mktemp -d "$project_dir/build-backup-XXXXXX")"
     mv -- "$build_dir" "$backup_dir/build"
     printf 'Ancienne compilation (%s) sauvegardée dans %s/build\n' "$previous_generator" "$backup_dir"
 
+elif [[ ! -e "$build_dir/CMakeCache.txt" ]]; then
+    # Une migration interrompue peut avoir déjà déplacé build/ avant la configuration.
+    for candidate in "$project_dir"/build-backup-*; do
+        if [[ -d "$candidate/build" ]] &&
+            [[ -z "$backup_dir" || "$candidate" -nt "$backup_dir" ]]; then
+            backup_dir="$candidate"
+        fi
+    done
+fi
+
+if [[ -n "$backup_dir" ]]; then
     # Les sources FetchContent sont indépendantes du générateur ; les sous-builds
     # et leurs caches restent dans la sauvegarde et ne sont pas réutilisés.
-    for dependency in JSON:json IMGUI:imgui GLFW:glfw GOOGLETEST:googletest; do
+    for dependency in JSON:json IMGUI:imgui GLFW:glfw GOOGLETEST:googletest LIBZIP:libzip; do
         dependency_name="${dependency%%:*}"
         dependency_source="$backup_dir/build/_deps/${dependency#*:}-src"
         if [[ -f "$dependency_source/CMakeLists.txt" ]] ||
@@ -35,9 +47,7 @@ if [[ -n "$previous_generator" && "$previous_generator" != "Unix Makefiles" ]]; 
     done
 fi
 
-# Supprimer tout ce qui se trouve dans le /build sauf les libblendnet
-find "$build_dir" ! -name "libblendnet*" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-
+# CMake crée build/ si nécessaire et conserve le cache pour les compilations suivantes.
 cmake "${configure_args[@]}" "$@"
 cmake --build "$build_dir" --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
 ctest --test-dir "$build_dir" --output-on-failure

@@ -17,6 +17,29 @@ include(CTest)
 find_package(Threads REQUIRED)
 find_package(OpenSSL 1.1.1 REQUIRED)
 find_path(ASIO_INCLUDE_DIR asio.hpp REQUIRED)
+find_package(ZLIB REQUIRED) # Dépendance de libzip, CRC des images PNG.
+
+# RF-43/53 : archives de résultats, dépendance de la stack contractuelle.
+find_package(libzip 1.7 CONFIG QUIET)
+if(NOT TARGET libzip::zip)
+    set(BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(BUILD_REGRESS OFF CACHE BOOL "" FORCE)
+    set(BUILD_OSSFUZZ OFF CACHE BOOL "" FORCE)
+    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(BUILD_DOC OFF CACHE BOOL "" FORCE)
+    set(ENABLE_COMMONCRYPTO OFF CACHE BOOL "" FORCE)
+    set(ENABLE_GNUTLS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_MBEDTLS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_OPENSSL OFF CACHE BOOL "" FORCE)
+    set(ENABLE_BZIP2 OFF CACHE BOOL "" FORCE)
+    set(ENABLE_LZMA OFF CACHE BOOL "" FORCE)
+    set(ENABLE_ZSTD OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(libzip
+        GIT_REPOSITORY https://github.com/nih-at/libzip.git
+        GIT_TAG 6f8a0cdd24a0dc6cce9dac4a7679da784ab124ea # v1.11.4
+    )
+    FetchContent_MakeAvailable(libzip)
+endif()
 
 # RF-10 / RNF-07 : configuration JSON et journalisation.
 set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
@@ -54,6 +77,13 @@ add_library(blendnet-core STATIC
     src/core/network/ClientSocket.cpp
     src/core/network/TransferLink.cpp
     src/core/transfer/TransferEngine.cpp
+    src/core/jobs/Job.cpp
+    src/core/jobs/EligibilityFilter.cpp
+    src/core/jobs/JobScheduler.cpp
+    src/core/jobs/JobOrchestrator.cpp
+    src/core/jobs/ResultAssembler.cpp
+    src/core/jobs/SimulatedWorker.cpp
+    src/core/jobs/JobFile.cpp
 )
 target_include_directories(blendnet-core PUBLIC
     "${PROJECT_SOURCE_DIR}/src/core"
@@ -61,7 +91,7 @@ target_include_directories(blendnet-core PUBLIC
 )
 target_link_libraries(blendnet-core
     PUBLIC Threads::Threads
-    PRIVATE nlohmann_json::nlohmann_json OpenSSL::SSL OpenSSL::Crypto
+    PRIVATE nlohmann_json::nlohmann_json OpenSSL::SSL OpenSSL::Crypto libzip::zip ZLIB::ZLIB
 )
 target_include_directories(blendnet-core SYSTEM PRIVATE "${ASIO_INCLUDE_DIR}")
 target_compile_definitions(blendnet-core PRIVATE ASIO_STANDALONE)
@@ -181,10 +211,11 @@ if(BUILD_TESTING)
         tests/unit/ProtocolCodecTests.cpp
         tests/unit/NetworkTests.cpp
         tests/unit/TransferTests.cpp
+        tests/unit/JobTests.cpp
     )
     target_include_directories(blendnet-tests PRIVATE "${PROJECT_SOURCE_DIR}/tests")
     target_link_libraries(blendnet-tests PRIVATE
-        blendnet-core GTest::gtest_main nlohmann_json::nlohmann_json
+        blendnet-core GTest::gtest_main nlohmann_json::nlohmann_json libzip::zip ZLIB::ZLIB
     )
     blendnet_warnings(blendnet-tests)
 
@@ -207,6 +238,12 @@ if(BUILD_TESTING)
     blendnet_warnings(blendnet-transfer-tests)
     add_test(NAME blendnet-transfer COMMAND blendnet-transfer-tests)
     set_tests_properties(blendnet-transfer PROPERTIES TIMEOUT 90)
+    add_executable(blendnet-job-tests tests/integration/JobTests.cpp)
+    target_include_directories(blendnet-job-tests PRIVATE "${PROJECT_SOURCE_DIR}/tests")
+    target_link_libraries(blendnet-job-tests PRIVATE blendnet-server blendnet-client GTest::gtest_main)
+    blendnet_warnings(blendnet-job-tests)
+    add_test(NAME blendnet-jobs COMMAND blendnet-job-tests)
+    set_tests_properties(blendnet-jobs PROPERTIES TIMEOUT 60)
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
         add_test(NAME blendnet-cli-network COMMAND "${Python3_EXECUTABLE}"
@@ -217,6 +254,10 @@ if(BUILD_TESTING)
             "${PROJECT_SOURCE_DIR}/tests/integration/cli_transfer.py"
             "$<TARGET_FILE:blendnet-server-cli>" "$<TARGET_FILE:blendnet-cli>")
         set_tests_properties(blendnet-cli-transfer PROPERTIES TIMEOUT 100)
+        add_test(NAME blendnet-cli-jobs COMMAND "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/integration/cli_jobs.py"
+            "$<TARGET_FILE:blendnet-server-cli>" "$<TARGET_FILE:blendnet-cli>")
+        set_tests_properties(blendnet-cli-jobs PROPERTIES TIMEOUT 45)
         if(BLENDNET_TEST_LARGE_TRANSFERS)
             add_test(NAME blendnet-transfer-large COMMAND "${Python3_EXECUTABLE}"
                 "${PROJECT_SOURCE_DIR}/tests/integration/cli_transfer.py"

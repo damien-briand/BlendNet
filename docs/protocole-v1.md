@@ -4,6 +4,7 @@ Références : cahier des charges §5.2, RF-10/12/13/25/42/50/54, RNF-04 et RNF-
 Le code de référence est `src/core/protocol/`. Ce module est headless et sans socket.
 La [couche TLS et la politique de session](reseau-p3.md) sont implémentées en P3 ;
 les [transferts avec reprise](transfert-p4.md) sont implémentés en P4.
+L'[orchestration des jobs](jobs-p5.md) est implémentée en P5.
 
 ## En-tête
 
@@ -55,6 +56,9 @@ Le payload est binaire :
 
 `fileId` est le même identifiant textuel que dans `FILE_BEGIN/END/ACK/ERR`, par exemple
 `jobId_PROJECT_ZIP`. L'ancien champ `u32 fileId` était incompatible avec ce contrat.
+Pour des résultats successifs, P5 utilise `chunkIdDeTentative_RESULT_ZIP` : chaque
+attribution porte un identifiant distinct, afin de conserver des offres de fichiers
+immuables et de rejeter les résultats tardifs d'une attribution précédente.
 
 - `fileIdLen` : 1 à **256 octets** ; UTF-8 valide, sans NUL.
 - `seq` : u32, à partir de 0 (la cohérence de séquence relève du transfert P4).

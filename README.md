@@ -17,7 +17,13 @@ permettent une [démo de connexion headless](docs/reseau-p3.md).
 La phase **P4** ajoute les transferts de fichiers dans les deux sens, le SHA-256 en
 flux, les checkpoints de reprise et les quotas de réception. Les deux CLI permettent
 une [démo de transfert avec reprise](docs/transfert-p4.md), y compris après redémarrage
-du récepteur. Le rendu distribué et les vues graphiques viennent dans les phases suivantes.
+du récepteur.
+
+La phase **P5** ajoute les jobs, le découpage en chunks, l'éligibilité des clients,
+l'attribution et la redistribution après échec, ainsi que la validation et l'assemblage
+des résultats. La [démo des jobs P5](docs/jobs-p5.md) utilise trois clients simulés et
+supporte la perte d'un client pendant son chunk. Le vrai rendu Blender vient en P6/P7 ;
+les vues graphiques viennent en P8.
 
 Références : [cahier des charges](docs/cahier-des-charges-blendnet.md) et
 [phases P1 à P9](docs/blendnet-spécification-agent-ia-guide-developpement.md).
@@ -26,7 +32,7 @@ Références : [cahier des charges](docs/cahier-des-charges-blendnet.md) et
 
 Prérequis : **CMake ≥ 3.21**, Git et compilateur **C++20** (GCC, Clang ou MSVC).
 Le réseau requiert les en-têtes **Asio standalone** et **OpenSSL ≥ 1.1.1**. La GUI requiert
-OpenGL 3.3 et GLFW. CMake utilise nlohmann/json, GLFW et GoogleTest installés
+OpenGL 3.3 et GLFW. Les ZIP requièrent Zlib ; CMake utilise libzip, nlohmann/json, GLFW et GoogleTest installés
 quand ils sont disponibles, et télécharge les dépendances manquantes depuis GitHub.
 Dear ImGui est téléchargé à une version fixe.
 
@@ -35,7 +41,7 @@ Dear ImGui est téléchargé à une version fixe.
 ```sh
 sudo apt install build-essential cmake git libgl1-mesa-dev \
     libglfw3-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-    libasio-dev libssl-dev
+    libasio-dev libssl-dev zlib1g-dev
 ./build.sh
 ./build/blendnet
 ```
@@ -46,6 +52,9 @@ d'un autre générateur (par exemple Ninja), le script sauvegarde son contenu da
 `build-backup-XXXXXX/build/`, puis recrée `build/` avec Make. Les dépendances déjà
 téléchargées sont réutilisées depuis cette sauvegarde, qui doit rester présente tant
 que le nouveau cache CMake référence leurs sources.
+Si la migration a été interrompue avant la configuration, relancer le script suffit :
+il réutilise les sources disponibles dans la sauvegarde la plus récente. Les compilations
+suivantes conservent le cache CMake et les dépendances déjà téléchargées.
 Le script s'arrête dès qu'une étape échoue et transmet ses arguments à la configuration :
 
 ```sh
@@ -111,6 +120,7 @@ FetchContent : `-DFETCHCONTENT_SOURCE_DIR_JSON=/chemin/json`,
 `-DFETCHCONTENT_SOURCE_DIR_GLFW=/chemin/glfw`,
 `-DFETCHCONTENT_SOURCE_DIR_IMGUI=/chemin/imgui` et
 `-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=/chemin/googletest`. Le dépôt ne contient pas ces sources.
+Pour libzip : `-DFETCHCONTENT_SOURCE_DIR_LIBZIP=/chemin/libzip` (ou installer `libzip-dev`).
 
 ## Configuration et journal
 
@@ -146,6 +156,7 @@ blendnet-server-cli → blendnet-server → blendnet-core
 blendnet-tests → blendnet-core
 blendnet-network-tests → blendnet-server / blendnet-client → blendnet-core
 blendnet-transfer-tests → blendnet-server / blendnet-client → blendnet-core
+blendnet-job-tests → blendnet-server / blendnet-client → blendnet-core
 ```
 
 `src/core/` ne dépend d'aucune bibliothèque graphique. Les modules serveur et client

@@ -1,7 +1,10 @@
 #include "network/TlsServer.h"
+#include "jobs/JobOrchestrator.h"
+#include "jobs/ResultAssembler.h"
 #include "network/Security.h"
 #include "network/TlsChannel.h"
 #include "network/TransferLink.h"
+#include "transfer/TransferEngine.h"
 
 #include <algorithm>
 #include <map>
@@ -115,10 +118,19 @@ struct TlsServer::Impl {
                          scope = peerScope](transfer::TransferProgress progress) {
                             owner->report(session, scope, std::move(progress));
                         });
+                    // Les projets P5 sont représentés après une nouvelle acceptation.
+                    // Le checkpoint P4 conserve les octets, sans envoyer avant JOB_ACCEPT.
+                    std::erase_if(owner.pendingFiles[peerScope], [&](const auto& pending) {
+                        for (const auto& job : owner.jobs->snapshot())
+                            if (pending.first == job.job.id + "_PROJECT_ZIP")
+                                return true;
+                        return false;
+                    });
                     for (const auto& [fileId, request] : owner.pendingFiles[peerScope])
                         transfers->sendFile(request);
                 }
                 owner.events.push({EventKind::Ready, NetworkError::None, id});
+                owner.jobs->connected(info);
                 owner.log(LogLevel::Info, "TLS client registered");
                 tick();
                 return;
@@ -131,6 +143,13 @@ struct TlsServer::Impl {
                 info.preferences = preferences->preferences;
                 owner.publish(info);
                 owner.events.push({EventKind::PreferencesChanged, NetworkError::None, id});
+                owner.jobs->preferences(info);
+            } else if (std::holds_alternative<protocol::FileErr>(message)) {
+                owner.jobs->message(id, message);
+                if (transfers)
+                    transfers->handle(std::move(message));
+            } else if (owner.jobs->message(id, message)) {
+                // Contrôles métier consommés par l'orchestrateur core.
             } else if (!transfers || !transfers->handle(std::move(message)))
                 channel->close(NetworkError::ProtocolViolation);
         }
@@ -156,6 +175,7 @@ struct TlsServer::Impl {
     asio::ssl::context tls{asio::ssl::context::tls_server};
     asio::ip::tcp::acceptor acceptor{io};
     asio::steady_timer acceptRetry{io};
+    asio::steady_timer jobTick{io};
     asio::executor_work_guard<asio::io_context::executor_type> work{asio::make_work_guard(io)};
     std::jthread thread;
     bool stopping = false;
@@ -165,6 +185,8 @@ struct TlsServer::Impl {
     mutable std::mutex mutex;
     ServerSnapshot state;
     EventQueue<NetworkEvent> events;
+    std::unique_ptr<jobs::JobOrchestrator> jobs;
+    std::atomic_bool jobsStopped{false};
 
     explicit Impl(Logger& log) : logger(log) {}
     ~Impl() { stop(); }
@@ -172,6 +194,8 @@ struct TlsServer::Impl {
     NetworkError start(const ServerOptions& settings) {
         options = settings;
         if (!options.timings.valid() || options.token.size() < 64 || options.maxClients == 0 ||
+            options.jobTimings.offerTimeout.count() <= 0 ||
+            options.jobTimings.taskTimeout.count() <= 0 ||
             !protocol::ProtocolCodec::encode(
                 protocol::HelloOk{protocol::protocolVersion, options.serverName}))
             return NetworkError::InvalidOptions;
@@ -202,11 +226,116 @@ struct TlsServer::Impl {
         state.port = acceptor.local_endpoint(error).port();
         if (error)
             return NetworkError::ListenFailed;
+        initializeJobs();
         accept();
         events.push({EventKind::Listening});
         log(LogLevel::Info, "TLS server listening");
         thread = std::jthread([this] { io.run(); });
         return NetworkError::None;
+    }
+    void initializeJobs() {
+        jobs::JobOrchestrator::Callbacks callbacks;
+        callbacks.send = [this](const std::string& id, const protocol::Message& message) {
+            const auto found = sessions.find(id);
+            if (found != sessions.end())
+                found->second->channel->send(message);
+        };
+        callbacks.sendFile = [this](const std::string& id, const transfer::FileRequest& request) {
+            offerFile(id, request);
+        };
+        callbacks.verify = [this](const jobs::Job& job, const protocol::TaskAssign& task,
+                                  const std::string& id, const std::filesystem::path& archive) {
+            verify(job, task, id, archive);
+        };
+        callbacks.assemble = [this](const jobs::Job& job,
+                                    const std::map<int, jobs::ValidatedFrame>& frames,
+                                    bool allowMissing) {
+            asio::post(workers, [this, job, frames, allowMissing] {
+                const bool valid =
+                    jobs::ResultAssembler::assemble(job, frames, &jobsStopped, allowMissing);
+                asio::post(io, [this, job, valid] {
+                    if (!stopping)
+                        jobs->assembled(job.id, valid);
+                });
+            });
+        };
+        if (options.localRenderer)
+            callbacks.local = [this](const jobs::Job& job, const protocol::TaskAssign& task) {
+                const auto renderer = options.localRenderer;
+                asio::post(workers, [this, job, task, renderer] {
+                    const auto path = job.outputDirectory / ".blendnet" /
+                                      transfer::storageKey(task.chunkId + "local") / "result.zip";
+                    bool success = false;
+                    try {
+                        std::filesystem::create_directories(path.parent_path());
+                        success = !jobsStopped && renderer(job, task, path);
+                    } catch (const std::exception&) {
+                    }
+                    asio::post(io, [this, job, task, path, success] {
+                        if (stopping)
+                            return;
+                        if (success)
+                            verify(job, task, "__blendnet_local_renderer", path);
+                        else
+                            jobs->validated(job.id, task.chunkId, "__blendnet_local_renderer", {});
+                    });
+                });
+            };
+        callbacks.changed = [this] {
+            const auto views = jobs->snapshot();
+            {
+                const std::lock_guard lock(mutex);
+                state.jobs = views;
+            }
+            if (!views.empty())
+                events.push({EventKind::JobsChanged});
+        };
+        jobs = std::make_unique<jobs::JobOrchestrator>(std::move(callbacks), options.jobTimings);
+        tickJobs();
+    }
+    void tickJobs() {
+        jobTick.expires_after(milliseconds(100));
+        jobTick.async_wait([this](const asio::error_code& error) {
+            if (error || stopping)
+                return;
+            jobs->tick();
+            tickJobs();
+        });
+    }
+    void verify(const jobs::Job& job, const protocol::TaskAssign& task, const std::string& id,
+                const std::filesystem::path& archive) {
+        asio::post(workers, [this, job, task, id, archive] {
+            const auto staging =
+                job.outputDirectory / ".blendnet" / transfer::storageKey(task.chunkId);
+            auto frames = jobs::ResultAssembler::validate(task, archive, staging, &jobsStopped);
+            asio::post(io, [this, job, task, id, frames = std::move(frames)]() mutable {
+                if (!stopping)
+                    jobs->validated(job.id, task.chunkId, id, std::move(frames));
+            });
+        });
+    }
+    void publishJob(jobs::Job job) {
+        if (stopping)
+            return;
+        asio::post(workers, [this, job = std::move(job)]() mutable {
+            bool readable = false;
+            try {
+                readable = std::filesystem::is_regular_file(job.projectZip);
+                if (readable)
+                    job.zipBytes = std::filesystem::file_size(job.projectZip);
+            } catch (const std::exception&) {
+            }
+            asio::post(io, [this, job = std::move(job), readable]() mutable {
+                if (stopping)
+                    return;
+                const auto id = job.id;
+                if (!readable || !jobs->publish(std::move(job))) {
+                    NetworkEvent event{EventKind::JobRejected};
+                    event.jobId = id;
+                    events.push(std::move(event));
+                }
+            });
+        });
     }
     void accept() {
         const auto id = randomSessionId();
@@ -252,6 +381,8 @@ struct TlsServer::Impl {
             log(LogLevel::Info, "File transfer completed");
         if (progress.state == transfer::TransferState::Failed)
             log(LogLevel::Warning, transfer::toString(progress.error));
+        if (jobs && !stopping)
+            jobs->transferred(id, progress);
     }
     void offerFile(const std::string& id, const transfer::FileRequest& request) {
         const auto found = sessions.find(id);
@@ -291,12 +422,16 @@ struct TlsServer::Impl {
         events.push({EventKind::Disconnected, error, id});
         log(error == NetworkError::Stopped ? LogLevel::Info : LogLevel::Warning, toString(error));
         sessions.erase(id);
+        if (jobs && !stopping)
+            jobs->disconnected(id);
     }
     void stop() {
         if (!thread.joinable())
             return;
         asio::post(io, [this] {
             stopping = true;
+            jobsStopped = true;
+            jobTick.cancel();
             asio::error_code ignored;
             acceptor.cancel(ignored);
             acceptor.close(ignored);
@@ -344,6 +479,45 @@ void TlsServer::interrupt(const std::string& id) {
             const auto found = impl->sessions.find(id);
             if (found != impl->sessions.end())
                 found->second->channel->close(NetworkError::IoError);
+        });
+}
+void TlsServer::publishJob(const jobs::Job& job) {
+    if (m_impl)
+        asio::post(m_impl->io, [impl = m_impl.get(), job] { impl->publishJob(job); });
+}
+void TlsServer::pauseJob(const std::string& id) {
+    if (m_impl)
+        asio::post(m_impl->io, [impl = m_impl.get(), id] {
+            if (impl->jobs && !impl->stopping)
+                impl->jobs->pause(id);
+        });
+}
+void TlsServer::resumeJob(const std::string& id) {
+    if (m_impl)
+        asio::post(m_impl->io, [impl = m_impl.get(), id] {
+            if (impl->jobs && !impl->stopping)
+                impl->jobs->resume(id);
+        });
+}
+void TlsServer::cancelJob(const std::string& id) {
+    if (m_impl)
+        asio::post(m_impl->io, [impl = m_impl.get(), id] {
+            if (impl->jobs && !impl->stopping)
+                impl->jobs->cancel(id);
+        });
+}
+void TlsServer::cancelTask(const std::string& id) {
+    if (m_impl)
+        asio::post(m_impl->io, [impl = m_impl.get(), id] {
+            if (impl->jobs && !impl->stopping)
+                impl->jobs->cancelTask(id);
+        });
+}
+void TlsServer::finalizeJobWithFailures(const std::string& id) {
+    if (m_impl)
+        asio::post(m_impl->io, [impl = m_impl.get(), id] {
+            if (impl->jobs && !impl->stopping)
+                impl->jobs->finalizeWithFailures(id);
         });
 }
 ServerSnapshot TlsServer::snapshot() const {

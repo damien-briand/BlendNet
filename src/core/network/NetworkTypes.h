@@ -1,11 +1,13 @@
 #pragma once
 
 #include "config/AppSettings.h"
+#include "jobs/Job.h"
 #include "protocol/Messages.h"
 #include "transfer/TransferTypes.h"
 
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -50,7 +52,10 @@ enum class EventKind {
     Reconnecting,
     Error,
     PreferencesChanged,
-    TransferProgress
+    TransferProgress,
+    JobMessage,
+    JobsChanged,
+    JobRejected
 };
 
 struct NetworkEvent {
@@ -63,6 +68,8 @@ struct NetworkEvent {
     std::string sessionId;
     std::chrono::milliseconds retryDelay{0};
     std::optional<transfer::TransferProgress> transfer;
+    std::optional<protocol::Message> message;
+    std::string jobId;
 };
 
 // RNF-05 : aucun callback réseau vers l'UI, consommation de snapshots/événements.
@@ -106,6 +113,10 @@ struct ServerOptions {
     std::size_t maxClients = 64;
     NetworkTimings timings;
     transfer::TransferOptions transfers;
+    jobs::JobTimings jobTimings;
+    // P5 : injectable pour le test headless ; P6 raccordera RenderProcess.
+    std::function<bool(const jobs::Job&, const protocol::TaskAssign&, const std::filesystem::path&)>
+        localRenderer;
 };
 
 struct ClientOptions {
@@ -132,6 +143,7 @@ struct ServerSnapshot {
     std::uint16_t port = 0;
     std::vector<ClientInfo> clients;
     std::vector<transfer::TransferProgress> transfers;
+    std::vector<jobs::JobSnapshot> jobs;
 };
 struct ClientSnapshot {
     ConnectionState state = ConnectionState::Disconnected;

@@ -120,6 +120,11 @@ Un « fichier » = un flux identifié, envoyé par blocs, reprise possible :
 
 Règles : à la réception de `FILE_END`, vérifier SHA-256 → `FILE_ACK` final ou `FILE_ERR`. Un fichier reçu s'écrit en flux dans le dossier de travail (jamais entièrement en RAM). Numéroter les fichiers `fileId = jobId + "_" + kind`.
 
+**Précision P5 :** le projet conserve `jobId_PROJECT_ZIP`. Chaque ZIP résultat utilise
+`chunkIdDeTentative_RESULT_ZIP` (`jobId_cN_aM_RESULT_ZIP`) : réutiliser le même
+`jobId_RESULT_ZIP` pour des chunks différents contredirait les offres immuables de P4.
+L'identifiant de tentative est celui transmis dans `TASK_ASSIGN.chunkId` et `PROGRESS.chunkId`.
+
 **Correction P2 :** `fileId` garde le même type textuel dans tous les messages ; l'ancien
 `u32 fileId` dans `FILE_DATA` ne pouvait pas représenter `jobId + "_" + kind`.
 Son encodage binaire est désormais précédé de sa longueur (1 à 256 octets UTF-8).
@@ -265,7 +270,7 @@ Découverte LAN, mode relais, UPnP, rendu vidéo direct, exécution de scripts P
 | P2 | validée sous Linux | 22 messages typés, ProtocolCodec headless, en-tête 12 octets et FILE_DATA avec identifiant UTF-8 documentés ; 13 tests protocole (fixtures, troncatures, tailles, schémas, corpus de 1 000 entrées). 24 tests unitaires au total et 4/4 CTest réussis, y compris en build headless avec AddressSanitizer/UndefinedBehaviorSanitizer. |
 | P3 | validée sous Linux | Asio standalone + OpenSSL (TLS ≥ 1.2), RenderServer/SourceConnection, identité persistante et token aléatoire, pin après HELLO_OK, PING/PONG, timeouts et backoff 1 s → 5 min. 28 tests unitaires + 12 tests réseau et démo des deux CLI : 6/6 CTest réussis sur le build complet et le build headless ASan/UBSan. Voir [réseau P3](reseau-p3.md). Intégration des vues en P8 ; Windows/macOS restent à vérifier. |
 | P4 | validée sous Linux | FILE_* bidirectionnel, SHA-256 et écriture en flux sur pool de workers, ACK par lots, fenêtre bornée, checkpoints persistants, reprise après reconnexion/redémarrage et quotas de réception. ZIP réel de 1 Gio interrompu à mi-parcours puis repris avec hash identique ; checksum faux détecté sans promotion. 38 tests unitaires + 12 réseau + 5 transfert ; 9/9 CTest réussis avec le test volumineux et 8/8 en headless ASan/UBSan. Le test volumineux reste optionnel. Voir [transfert P4](transfert-p4.md). Windows/macOS restent à vérifier. |
-| P5 | à faire | |
+| P5 | validée sous Linux | Job/Chunk/FrameRange, EligibilityFilter et JobOrchestrator dans core : offres avec délai, découpage par nombre de frames, attribution exclusive, transferts P4, redistribution et maximum de trois échecs, pause/reprise/annulation. Identifiants de tentative distincts ; résultats tardifs rejetés. ResultAssembler avec libzip, extraction bornée, vérification des images et assemblage avant Done, y compris finalisation explicitement acceptée avec échecs. 52 tests unitaires + 12 réseau + 5 transfert + 4 jobs ; 10/10 CTest réussis en build complet Make et en headless ASan/UBSan. Démo de trois vrais processus clients simulés : un client tué pendant son chunk, 60/60 PNG vérifiés après redistribution. Voir [jobs P5](jobs-p5.md). Le rendu réel relève de P6/P7 ; Windows/macOS restent à vérifier. |
 | P6 | à faire | |
 | P7 | à faire | |
 | P8 | à faire | |

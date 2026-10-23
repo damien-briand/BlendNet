@@ -19,6 +19,12 @@ class TlsServer {
     void sendFile(const std::string& sessionId, const transfer::FileRequest& request);
     // Coupure de transport (diagnostic) ; contrairement au kick, le client peut se reconnecter.
     void interrupt(const std::string& sessionId);
+    void publishJob(const jobs::Job& job);
+    void pauseJob(const std::string& jobId);
+    void resumeJob(const std::string& jobId);
+    void cancelJob(const std::string& jobId);
+    void cancelTask(const std::string& sessionId);
+    void finalizeJobWithFailures(const std::string& jobId);
     ServerSnapshot snapshot() const;
     std::vector<NetworkEvent> drainEvents();
 
