@@ -3,6 +3,7 @@
 #include "log/Logger.h"
 
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -44,6 +45,17 @@ struct AppSettings {
     std::optional<int> benchmarkScore;
     bool keepCompletedJobs = false;
     std::vector<KnownSource> knownSources;
+    std::vector<std::filesystem::path> projectDirectories, hiddenProjects;
+    std::string blenderVersion = "4.2.1";
+    std::vector<std::string> excludedEngines;
+    std::string availability = "AVAILABLE";
+    int maxFramesPerJob = 0, quotaGB = 0;
+    int renderThreads = 2, renderTimeoutSec = 3600, offerTimeoutSec = 60;
+    bool scheduleEnabled = false, stopOnActivity = false, backgroundRendering = true;
+    int availableFromHour = 22, availableUntilHour = 7;
+    int serverPort = 47050;
+    std::string publicAddress;
+    bool benchmarkPrompted = false;
 
     bool operator==(const AppSettings&) const = default;
 
@@ -51,6 +63,9 @@ struct AppSettings {
     // En cas d'erreur, la destination et le fichier existant restent inchangés.
     static SettingsError load(const std::filesystem::path& path, AppSettings& destination);
     SettingsError save(const std::filesystem::path& path) const;
+    // Serialize in-process read/modify/write operations (GUI, pinning, benchmark).
+    static SettingsError update(const std::filesystem::path& path,
+                                const std::function<SettingsError(AppSettings&)>& modify);
     SettingsError validate() const;
 };
 

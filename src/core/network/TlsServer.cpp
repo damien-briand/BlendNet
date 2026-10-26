@@ -513,6 +513,13 @@ void TlsServer::cancelTask(const std::string& id) {
                 impl->jobs->cancelTask(id);
         });
 }
+void TlsServer::excludeClient(const std::string& session, const std::string& job) {
+    if (m_impl)
+        asio::post(m_impl->io, [impl = m_impl.get(), session, job] {
+            if (impl->jobs && !impl->stopping)
+                impl->jobs->message(session, protocol::JobDecline{job});
+        });
+}
 void TlsServer::finalizeJobWithFailures(const std::string& id) {
     if (m_impl)
         asio::post(m_impl->io, [impl = m_impl.get(), id] {

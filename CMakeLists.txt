@@ -102,6 +102,8 @@ add_library(blendnet-core STATIC
     src/core/jobs/JobExecutor.cpp
     src/core/archive/ZipService.cpp
     src/core/jobs/JobFile.cpp
+    src/core/projects/ProjectLibrary.cpp
+    src/core/application/DesktopController.cpp
     src/core/blender/BlenderTypes.cpp
     src/core/blender/Process.cpp
     src/core/blender/BlenderInstaller.cpp
@@ -126,6 +128,9 @@ if(WIN32)
     target_compile_definitions(blendnet-core PRIVATE _WIN32_WINNT=0x0A00)
 endif()
 blendnet_warnings(blendnet-core)
+add_library(blendnet-i18n STATIC src/ui/I18n.cpp)
+target_include_directories(blendnet-i18n PUBLIC "${PROJECT_SOURCE_DIR}/src/ui")
+blendnet_warnings(blendnet-i18n)
 
 # Façades des rôles ; la logique réseau headless reste dans core/.
 add_library(blendnet-server STATIC src/server/RenderServer.cpp)
@@ -186,10 +191,12 @@ if(BLENDNET_BUILD_GUI)
         "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
         "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
         "${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp"
+        "${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp"
     )
     target_include_directories(blendnet-imgui PUBLIC
         "${imgui_SOURCE_DIR}"
         "${imgui_SOURCE_DIR}/backends"
+        "${imgui_SOURCE_DIR}/misc/cpp"
     )
     target_link_libraries(blendnet-imgui PUBLIC
         glfw OpenGL::GL ${CMAKE_DL_LIBS}
@@ -198,13 +205,13 @@ if(BLENDNET_BUILD_GUI)
         GL_SILENCE_DEPRECATION
     )
 
-    add_library(blendnet-ui STATIC src/ui/App.cpp)
+    add_library(blendnet-ui STATIC src/ui/App.cpp src/ui/Views.cpp src/ui/Automation.cpp)
     target_include_directories(blendnet-ui PUBLIC
         "${PROJECT_SOURCE_DIR}/src/ui"
     )
     target_link_libraries(blendnet-ui
         PUBLIC blendnet-server blendnet-client
-        PRIVATE blendnet-imgui
+        PRIVATE blendnet-imgui blendnet-i18n nlohmann_json::nlohmann_json
     )
     target_compile_definitions(blendnet-ui PRIVATE
         GL_SILENCE_DEPRECATION
@@ -240,16 +247,25 @@ if(BUILD_TESTING)
         tests/unit/JobTests.cpp
         tests/unit/BlenderTests.cpp
         tests/unit/ZipServiceTests.cpp
+        tests/unit/DesktopPolicyTests.cpp
     )
     target_include_directories(blendnet-tests PRIVATE "${PROJECT_SOURCE_DIR}/tests")
     target_link_libraries(blendnet-tests PRIVATE
-        blendnet-core GTest::gtest_main nlohmann_json::nlohmann_json libzip::zip ZLIB::ZLIB
+        blendnet-core blendnet-i18n GTest::gtest_main nlohmann_json::nlohmann_json libzip::zip ZLIB::ZLIB
     )
     blendnet_warnings(blendnet-tests)
     add_executable(blendnet-fake-blender tests/helpers/FakeBlender.cpp)
     blendnet_warnings(blendnet-fake-blender)
     target_compile_definitions(blendnet-tests PRIVATE BLENDNET_FAKE_BLENDER_PATH="$<TARGET_FILE:blendnet-fake-blender>")
     add_dependencies(blendnet-tests blendnet-fake-blender)
+    add_executable(blendnet-desktop-tests tests/integration/DesktopTests.cpp)
+    target_include_directories(blendnet-desktop-tests PRIVATE "${PROJECT_SOURCE_DIR}/tests")
+    target_compile_definitions(blendnet-desktop-tests PRIVATE BLENDNET_FAKE_BLENDER_PATH="$<TARGET_FILE:blendnet-fake-blender>")
+    target_link_libraries(blendnet-desktop-tests PRIVATE blendnet-core GTest::gtest_main libzip::zip)
+    add_dependencies(blendnet-desktop-tests blendnet-fake-blender)
+    blendnet_warnings(blendnet-desktop-tests)
+    add_test(NAME blendnet-desktop COMMAND blendnet-desktop-tests)
+    set_tests_properties(blendnet-desktop PROPERTIES TIMEOUT 60)
 
     add_test(NAME blendnet-unit COMMAND blendnet-tests)
     add_executable(blendnet-network-tests tests/integration/NetworkTests.cpp)
@@ -317,5 +333,13 @@ if(BUILD_TESTING)
             --config "${PROJECT_BINARY_DIR}/gui-smoke/settings.json"
         )
         set_tests_properties(blendnet-gui-smoke PROPERTIES TIMEOUT 30 LABELS gui)
+        if(BLENDNET_TEST_BLENDER AND Python3_Interpreter_FOUND)
+            add_test(NAME blendnet-gui-flow COMMAND "${Python3_EXECUTABLE}"
+                "${PROJECT_SOURCE_DIR}/tests/integration/gui_flow.py"
+                "$<TARGET_FILE:blendnet>" "$<TARGET_FILE:blendnet-cli>"
+                "${BLENDNET_BLENDER_TEST_VERSION}" "${BLENDNET_BLENDER_TEST_CACHE}"
+                "${PROJECT_BINARY_DIR}/gui-artifacts")
+            set_tests_properties(blendnet-gui-flow PROPERTIES TIMEOUT 900 LABELS "gui;blender")
+        endif()
     endif()
 endif()

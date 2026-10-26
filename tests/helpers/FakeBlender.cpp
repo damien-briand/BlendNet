@@ -39,6 +39,12 @@ int main(int argc, char** argv) {
         return 0;
     }
     const auto script = option(args, "--python-expr");
+    if (script.find("BLENDNET_PROJECT:") != script.npos) {
+        std::cout
+            << "BLENDNET_PROJECT:{\"engine\":\"CYCLES\",\"start\":1,\"end\":3,\"step\":1,\"width\":"
+               "1,\"height\":1,\"format\":\"PNG\",\"version\":\"4.2.1\",\"dependencies\":[]}\n";
+        return 0;
+    }
     if (script.find("BLENDNET_GPU:") != script.npos) {
         std::cout << "BLENDNET_GPU:{\"version\":\"4.2.1\",\"devices\":[{\"name\":\"Fixture "
                      "CPU\",\"backend\":\"CPU\"},{\"name\":\"Fixture "

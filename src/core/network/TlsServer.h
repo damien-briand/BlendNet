@@ -24,6 +24,7 @@ class TlsServer {
     void resumeJob(const std::string& jobId);
     void cancelJob(const std::string& jobId);
     void cancelTask(const std::string& sessionId);
+    void excludeClient(const std::string& sessionId, const std::string& jobId);
     void finalizeJobWithFailures(const std::string& jobId);
     ServerSnapshot snapshot() const;
     std::vector<NetworkEvent> drainEvents();

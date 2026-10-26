@@ -51,6 +51,7 @@ struct JobExecutor::Impl {
     bool stopping = false;
     std::uint64_t generation = 0;
     std::optional<protocol::TaskAssign> active;
+    std::optional<protocol::Progress> currentProgress;
     std::set<std::string> paused;
     // Owner-side admission stays responsive even while the worker installs or renders.
     std::map<std::string, protocol::JobOffer> accepted;
@@ -148,6 +149,10 @@ struct JobExecutor::Impl {
         const auto directory = attempt(task);
         protocol::Progress highest{
             task.jobId, task.chunkId, task.frameStart, 0, int(range.count()), 0, {}};
+        {
+            const std::lock_guard lock(mutex);
+            currentProgress = highest;
+        }
         std::mutex progressMutex;
         std::condition_variable_any heartbeatWake;
         std::jthread heartbeat([&](std::stop_token stop) {
@@ -219,6 +224,10 @@ struct JobExecutor::Impl {
                     }
                     if (live(epoch))
                         callbacks.send(report);
+                    {
+                        const std::lock_guard lock(mutex);
+                        currentProgress = report;
+                    }
                     if (options.quotaBytes && !cancelled && !available()) {
                         quotaExceeded = true;
                         cancelled = true;
@@ -427,4 +436,8 @@ void JobExecutor::handle(const network::NetworkEvent& event) {
     m_impl->wake.notify_all();
 }
 std::vector<ExecutorEvent> JobExecutor::drainEvents() { return m_impl->events.drain(); }
+std::optional<protocol::Progress> JobExecutor::progress() const {
+    const std::lock_guard lock(m_impl->mutex);
+    return m_impl->currentProgress;
+}
 } // namespace blendnet::jobs

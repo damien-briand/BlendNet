@@ -14,10 +14,12 @@ namespace {
 int run(int argc, char** argv) {
     auto configPath = blendnet::AppSettings::defaultPath();
     bool smokeTest = false;
+    std::filesystem::path automation, screenshot;
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument(argv[index]);
         if (argument == "--help") {
-            std::cout << "Usage: blendnet [--config PATH] [--smoke-test] [--version]\n"
+            std::cout << "Usage: blendnet [--config PATH] [--smoke-test] [--version] [--ui-test "
+                         "PATH] [--screenshot PATH]\n"
                          "  --smoke-test  Render three frames, then exit.\n";
             return 0;
         }
@@ -29,6 +31,10 @@ int run(int argc, char** argv) {
             configPath = blendnet::pathFromUtf8(argv[++index]);
         } else if (argument == "--smoke-test") {
             smokeTest = true;
+        } else if (argument == "--ui-test" && index + 1 < argc) {
+            automation = blendnet::pathFromUtf8(argv[++index]);
+        } else if (argument == "--screenshot" && index + 1 < argc) {
+            screenshot = blendnet::pathFromUtf8(argv[++index]);
         } else {
             std::cerr << "Invalid argument. Use --help.\n";
             return 2;
@@ -55,14 +61,14 @@ int run(int argc, char** argv) {
         std::cerr << "Cannot open application log.\n";
         return 1;
     }
-    if (logger.log(blendnet::LogLevel::Info, "BlendNet starting (P1)") !=
-        blendnet::LogError::None) {
+    if (logger.log(blendnet::LogLevel::Info, "BlendNet starting") != blendnet::LogError::None) {
         std::cerr << "Cannot write application log.\n";
         return 1;
     }
 
     blendnet::App app;
-    const auto result = app.run(smokeTest ? 3 : 0);
+    const auto result =
+        app.run(settings, configPath, logger, smokeTest ? 3 : 0, automation, screenshot);
     if (result != blendnet::AppError::None) {
         const auto logged = logger.log(blendnet::LogLevel::Error, "GUI initialization failed");
         if (logged != blendnet::LogError::None) {

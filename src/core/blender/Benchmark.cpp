@@ -64,9 +64,11 @@ BlenderResult<BenchmarkResult> Benchmark::run(const VerifiedBlender& binary,
             return {{}, rendered.error};
         const auto duration = std::max<std::int64_t>(1, rendered.value->elapsed.count());
         const auto score = int(std::clamp<std::int64_t>(100000000 / duration, 1, INT32_MAX));
-        settings.computeBackend = backend;
-        settings.benchmarkScore = score;
-        if (settings.save(settingsPath) != SettingsError::None)
+        if (AppSettings::update(settingsPath, [&](AppSettings& current) {
+                current.computeBackend = backend;
+                current.benchmarkScore = score;
+                return SettingsError::None;
+            }) != SettingsError::None)
             return {{}, BlenderError::IoError};
         return {BenchmarkResult{score, rendered.value->elapsed}, BlenderError::None};
     } catch (const std::exception&) {

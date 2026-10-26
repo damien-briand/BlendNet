@@ -5,6 +5,7 @@
 #include "blender/Process.h"
 #include "jobs/JobExecutor.h"
 #include "jobs/ResultAssembler.h"
+#include "projects/ProjectLibrary.h"
 #include "protocol/ProtocolCodec.h"
 #include "transfer/TransferEngine.h"
 
@@ -329,6 +330,33 @@ TEST(BlenderMetadataTest, ChecksumSelectionIsExactAndRejectsAmbiguity) {
     EXPECT_FALSE(publishedChecksum(hash + "  other-file.tar.xz\n", "file.tar.xz"));
     EXPECT_FALSE(publishedChecksum(hash + " file\n" + hash + " file\n", "file"));
     EXPECT_FALSE(publishedChecksum(std::string(64, 'g') + " file\n", "file"));
+}
+TEST_F(BlenderTest, ProjectMetadataAndPortableArchivePreserveOnlySelectedDependencies) {
+    const auto binary = install();
+    ASSERT_TRUE(binary);
+    const auto root = directory.path() / "project";
+    std::filesystem::create_directories(root / "textures");
+    test::writeFile(root / "scene.blend", "Original scene, do not modify");
+    test::writeFile(root / "textures/image.bin", "texture");
+    test::writeFile(root / "private-not-a-dependency.txt", "not shared");
+    auto info = projects::ProjectLibrary::inspect(*binary.value, root / "scene.blend");
+    ASSERT_TRUE(info);
+    EXPECT_EQ(info.value->engine, "CYCLES");
+    EXPECT_EQ(info.value->end, 3);
+    info.value->dependencies = {root / "textures"};
+    const auto zip = directory.path() / "export/project.zip";
+    ASSERT_EQ(projects::ProjectLibrary::package(*binary.value, *info.value, zip),
+              BlenderError::None);
+    const auto output = directory.path() / "unpacked";
+    ASSERT_TRUE(archive::ZipService::extractProject(zip, output));
+    EXPECT_EQ(test::readFile(output / "textures/image.bin"), "texture");
+    EXPECT_FALSE(std::filesystem::exists(output / "private-not-a-dependency.txt"));
+    EXPECT_EQ(test::readFile(root / "scene.blend"), "Original scene, do not modify");
+    info.value->dependencies = {archive};
+    EXPECT_EQ(
+        projects::ProjectLibrary::package(*binary.value, *info.value, directory.path() / "bad.zip"),
+        BlenderError::InvalidRequest);
+    EXPECT_FALSE(std::filesystem::exists(directory.path() / "bad.zip"));
 }
 TEST_F(BlenderTest, InstallationIsVerifiedAndReusedOffline) {
     const auto binary = install();

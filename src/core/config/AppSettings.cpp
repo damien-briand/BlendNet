@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <utility>
 
@@ -23,6 +24,7 @@ namespace blendnet {
 namespace {
 
 using Json = nlohmann::json;
+std::recursive_mutex settingsFileMutex;
 
 std::filesystem::path environmentPath(const char* name) {
     const auto* value = std::getenv(name);
@@ -111,13 +113,32 @@ std::filesystem::path AppSettings::defaultPath() {
 
 SettingsError AppSettings::validate() const {
     constexpr std::array backends{"OPTIX", "CUDA", "HIP", "ONEAPI", "METAL", "CPU"};
+    constexpr std::array availabilityValues{"AVAILABLE", "BUSY_GAME", "BUSY_WORK", "DND",
+                                            "OFFLINE"};
     if ((language != "fr" && language != "en") || logLevel < LogLevel::Debug ||
         logLevel > LogLevel::Off ||
         std::find(backends.begin(), backends.end(), computeBackend) == backends.end() ||
         !isUsablePath(workDirectory) || !isUsablePath(blenderCacheDirectory) ||
-        (benchmarkScore && *benchmarkScore < 0)) {
+        (benchmarkScore && *benchmarkScore < 0) ||
+        std::find(availabilityValues.begin(), availabilityValues.end(), availability) ==
+            availabilityValues.end() ||
+        maxFramesPerJob < 0 || quotaGB < 0 || renderThreads < 1 || renderThreads > 1024 ||
+        renderTimeoutSec < 1 || renderTimeoutSec > 86400 || offerTimeoutSec < 1 ||
+        offerTimeoutSec > 3600 || availableFromHour < 0 || availableFromHour > 23 ||
+        availableUntilHour < 0 || availableUntilHour > 23 || serverPort < 1 || serverPort > 65535 ||
+        blenderVersion.empty() || blenderVersion.size() > 32 || publicAddress.size() > 255 ||
+        publicAddress.find_first_of("\r\n\t") != std::string::npos ||
+        projectDirectories.size() > 128 || hiddenProjects.size() > 10000 ||
+        knownSources.size() > 64) {
         return SettingsError::InvalidValue;
     }
+    for (const auto& engine : excludedEngines)
+        if (engine != "CYCLES" && engine != "EEVEE")
+            return SettingsError::InvalidValue;
+    for (const auto& paths : {projectDirectories, hiddenProjects})
+        for (const auto& path : paths)
+            if (!isUsablePath(path))
+                return SettingsError::InvalidValue;
     for (const auto& source : knownSources) {
         if (source.host.empty() || source.host.find_first_of("\r\n\t ") != std::string::npos ||
             source.host.find('\0') != std::string::npos || source.port < 1 || source.port > 65535 ||
@@ -130,6 +151,7 @@ SettingsError AppSettings::validate() const {
 }
 
 SettingsError AppSettings::load(const std::filesystem::path& path, AppSettings& destination) {
+    const std::lock_guard lock(settingsFileMutex);
     std::error_code error;
     // exists(path, error) efface aussi ENOTDIR en signalant simplement « absent ».
     // Garder l'erreur de status pour distinguer un parent fichier d'un chemin inexistant.
@@ -172,6 +194,37 @@ SettingsError AppSettings::load(const std::filesystem::path& path, AppSettings& 
         settings.language = data.value("language", settings.language);
         settings.computeBackend = data.value("computeBackend", settings.computeBackend);
         settings.keepCompletedJobs = data.value("keepCompletedJobs", settings.keepCompletedJobs);
+        settings.blenderVersion = data.value("blenderVersion", settings.blenderVersion);
+        settings.availability = data.value("availability", settings.availability);
+        settings.publicAddress = data.value("publicAddress", settings.publicAddress);
+        settings.excludedEngines = data.value("excludedEngines", settings.excludedEngines);
+        settings.scheduleEnabled = data.value("scheduleEnabled", settings.scheduleEnabled);
+        settings.stopOnActivity = data.value("stopOnActivity", settings.stopOnActivity);
+        settings.backgroundRendering =
+            data.value("backgroundRendering", settings.backgroundRendering);
+        settings.benchmarkPrompted = data.value("benchmarkPrompted", settings.benchmarkPrompted);
+        const auto settingInt = [&](const char* key, int& value, int minimum, int maximum) {
+            if (data.contains(key))
+                value = integer(data.at(key), minimum, maximum);
+        };
+        settingInt("maxFramesPerJob", settings.maxFramesPerJob, 0, INT32_MAX);
+        settingInt("quotaGB", settings.quotaGB, 0, INT32_MAX);
+        settingInt("renderThreads", settings.renderThreads, 1, 1024);
+        settingInt("renderTimeoutSec", settings.renderTimeoutSec, 1, 86400);
+        settingInt("offerTimeoutSec", settings.offerTimeoutSec, 1, 3600);
+        settingInt("availableFromHour", settings.availableFromHour, 0, 23);
+        settingInt("availableUntilHour", settings.availableUntilHour, 0, 23);
+        settingInt("serverPort", settings.serverPort, 1, 65535);
+        const auto paths = [&](const char* key, std::vector<std::filesystem::path>& result) {
+            if (data.contains(key)) {
+                if (!data.at(key).is_array())
+                    throw std::invalid_argument("Invalid paths");
+                for (const auto& path : data.at(key))
+                    result.push_back(pathFromUtf8(path.get<std::string>()));
+            }
+        };
+        paths("projectDirectories", settings.projectDirectories);
+        paths("hiddenProjects", settings.hiddenProjects);
         const auto level = parseLogLevel(data.value("logLevel", std::string("info")));
         if (!level) {
             return SettingsError::InvalidValue;
@@ -220,6 +273,7 @@ SettingsError AppSettings::load(const std::filesystem::path& path, AppSettings& 
 }
 
 SettingsError AppSettings::save(const std::filesystem::path& path) const {
+    const std::lock_guard lock(settingsFileMutex);
     if (validate() != SettingsError::None) {
         return SettingsError::InvalidValue;
     }
@@ -233,15 +287,37 @@ SettingsError AppSettings::save(const std::filesystem::path& path) const {
                  {"certificateSha256",
                   source.certificateSha256 ? Json(*source.certificateSha256) : Json(nullptr)}});
         }
-        const Json data{{"schemaVersion", schemaVersion},
-                        {"language", language},
-                        {"logLevel", toString(logLevel)},
-                        {"computeBackend", computeBackend},
-                        {"keepCompletedJobs", keepCompletedJobs},
-                        {"workDirectory", pathUtf8(workDirectory)},
-                        {"blenderCacheDirectory", pathUtf8(blenderCacheDirectory)},
-                        {"benchmarkScore", benchmarkScore ? Json(*benchmarkScore) : Json(nullptr)},
-                        {"knownSources", std::move(sources)}};
+        Json data{{"schemaVersion", schemaVersion},
+                  {"language", language},
+                  {"logLevel", toString(logLevel)},
+                  {"computeBackend", computeBackend},
+                  {"keepCompletedJobs", keepCompletedJobs},
+                  {"workDirectory", pathUtf8(workDirectory)},
+                  {"blenderCacheDirectory", pathUtf8(blenderCacheDirectory)},
+                  {"benchmarkScore", benchmarkScore ? Json(*benchmarkScore) : Json(nullptr)},
+                  {"knownSources", std::move(sources)}};
+        data.update({{"blenderVersion", blenderVersion},
+                     {"availability", availability},
+                     {"excludedEngines", excludedEngines},
+                     {"maxFramesPerJob", maxFramesPerJob},
+                     {"quotaGB", quotaGB},
+                     {"renderThreads", renderThreads},
+                     {"renderTimeoutSec", renderTimeoutSec},
+                     {"offerTimeoutSec", offerTimeoutSec},
+                     {"scheduleEnabled", scheduleEnabled},
+                     {"availableFromHour", availableFromHour},
+                     {"availableUntilHour", availableUntilHour},
+                     {"stopOnActivity", stopOnActivity},
+                     {"backgroundRendering", backgroundRendering},
+                     {"serverPort", serverPort},
+                     {"publicAddress", publicAddress},
+                     {"benchmarkPrompted", benchmarkPrompted}});
+        data["projectDirectories"] = Json::array();
+        for (const auto& path : projectDirectories)
+            data["projectDirectories"].push_back(pathUtf8(path));
+        data["hiddenProjects"] = Json::array();
+        for (const auto& path : hiddenProjects)
+            data["hiddenProjects"].push_back(pathUtf8(path));
         // Sérialiser avant de toucher au disque (notamment pour un UTF-8 invalide).
         const auto serialized = data.dump(4) + '\n';
         std::error_code error;
@@ -294,6 +370,17 @@ SettingsError AppSettings::save(const std::filesystem::path& path) const {
     } catch (const std::filesystem::filesystem_error&) {
         return SettingsError::WriteFailed;
     }
+}
+
+SettingsError AppSettings::update(const std::filesystem::path& path,
+                                  const std::function<SettingsError(AppSettings&)>& modify) {
+    const std::lock_guard lock(settingsFileMutex);
+    AppSettings settings;
+    const auto loaded = load(path, settings);
+    if (loaded != SettingsError::None && loaded != SettingsError::NotFound)
+        return loaded;
+    const auto result = modify(settings);
+    return result == SettingsError::None ? settings.save(path) : result;
 }
 
 } // namespace blendnet

@@ -167,27 +167,29 @@ NetworkError ensureServerIdentity(const std::filesystem::path& directory,
 }
 NetworkError persistPin(const std::filesystem::path& path, const KnownSource& source,
                         const std::string& fingerprint) {
-    static std::mutex mutex;
-    const std::lock_guard lock(mutex);
-    AppSettings settings;
-    const auto loaded = AppSettings::load(path, settings);
-    if (loaded != SettingsError::None && loaded != SettingsError::NotFound)
-        return NetworkError::PinPersistenceFailed;
-    auto found = std::find_if(settings.knownSources.begin(), settings.knownSources.end(),
-                              [&source](const KnownSource& entry) {
-                                  return entry.host == source.host && entry.port == source.port;
-                              });
-    if (found != settings.knownSources.end()) {
-        if (found->certificateSha256 && !sameFingerprint(*found->certificateSha256, fingerprint))
-            return NetworkError::CertificateMismatch;
-        found->certificateSha256 = fingerprint;
-        found->token = source.token;
-    } else {
-        auto entry = source;
-        entry.certificateSha256 = fingerprint;
-        settings.knownSources.push_back(std::move(entry));
-    }
-    return settings.save(path) == SettingsError::None ? NetworkError::None
-                                                      : NetworkError::PinPersistenceFailed;
+    auto error = NetworkError::None;
+    const auto result = AppSettings::update(path, [&](AppSettings& settings) {
+        auto found = std::find_if(settings.knownSources.begin(), settings.knownSources.end(),
+                                  [&source](const KnownSource& entry) {
+                                      return entry.host == source.host && entry.port == source.port;
+                                  });
+        if (found != settings.knownSources.end()) {
+            if (found->certificateSha256 &&
+                !sameFingerprint(*found->certificateSha256, fingerprint)) {
+                error = NetworkError::CertificateMismatch;
+                return SettingsError::InvalidValue;
+            }
+            found->certificateSha256 = fingerprint;
+            found->token = source.token;
+        } else {
+            auto entry = source;
+            entry.certificateSha256 = fingerprint;
+            settings.knownSources.push_back(std::move(entry));
+        }
+        return SettingsError::None;
+    });
+    return error != NetworkError::None     ? error
+           : result == SettingsError::None ? NetworkError::None
+                                           : NetworkError::PinPersistenceFailed;
 }
 } // namespace blendnet::network

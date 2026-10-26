@@ -2,9 +2,43 @@
 #include "config/AppSettings.h"
 
 #include <gtest/gtest.h>
+#include <thread>
 
 using namespace blendnet;
 using namespace blendnet::test;
+TEST(AppSettingsTest, ConcurrentTransactionsDoNotLosePairingOrPreferences) {
+    const TemporaryDirectory directory;
+    const auto path = directory.path() / "settings.json";
+    std::jthread first([&] {
+        for (int i = 0; i < 16; ++i)
+            EXPECT_EQ(AppSettings::update(path,
+                                          [&](AppSettings& s) {
+                                              s.knownSources.push_back({"host-" + std::to_string(i),
+                                                                        47050, "token",
+                                                                        std::string(64, 'a')});
+                                              return SettingsError::None;
+                                          }),
+                      SettingsError::None);
+    });
+    std::jthread second([&] {
+        for (int i = 0; i < 16; ++i)
+            EXPECT_EQ(AppSettings::update(path,
+                                          [&](AppSettings& s) {
+                                              s.hiddenProjects.push_back(std::to_string(i) +
+                                                                         ".blend");
+                                              s.language = "en";
+                                              return SettingsError::None;
+                                          }),
+                      SettingsError::None);
+    });
+    first.join();
+    second.join();
+    AppSettings actual;
+    ASSERT_EQ(AppSettings::load(path, actual), SettingsError::None);
+    EXPECT_EQ(actual.knownSources.size(), 16u);
+    EXPECT_EQ(actual.hiddenProjects.size(), 16u);
+    EXPECT_EQ(actual.language, "en");
+}
 
 TEST(AppSettingsTest, MissingFilePreservesState) {
     const TemporaryDirectory directory;
@@ -32,6 +66,24 @@ TEST(AppSettingsTest, RoundTripAndAtomicReplacement) {
     expected.logLevel = LogLevel::Debug;
     expected.benchmarkScore = 456;
     expected.keepCompletedJobs = true;
+    expected.projectDirectories = {std::filesystem::path(u8"Scènes")};
+    expected.hiddenProjects = {"hidden.blend"};
+    expected.blenderVersion = "4.2.1";
+    expected.excludedEngines = {"EEVEE"};
+    expected.availability = "BUSY_WORK";
+    expected.maxFramesPerJob = 40;
+    expected.quotaGB = 12;
+    expected.renderThreads = 4;
+    expected.renderTimeoutSec = 1800;
+    expected.offerTimeoutSec = 45;
+    expected.scheduleEnabled = true;
+    expected.availableFromHour = 22;
+    expected.availableUntilHour = 6;
+    expected.stopOnActivity = true;
+    expected.backgroundRendering = false;
+    expected.serverPort = 47051;
+    expected.publicAddress = "render.example.org";
+    expected.benchmarkPrompted = true;
     expected.workDirectory = std::filesystem::path(u8"projets/Scènes");
     expected.blenderCacheDirectory = "cache/blender";
     expected.knownSources = {
@@ -102,6 +154,16 @@ TEST(AppSettingsTest, InvalidTypesAndRangesPreserveState) {
         R"({"blenderCacheDirectory":false})",
         R"({"keepCompletedJobs":"yes"})",
         R"({"keepCompletedJobs":1})",
+        R"({"serverPort":0})",
+        R"({"renderThreads":0})",
+        R"({"quotaGB":-1})",
+        R"({"availableUntilHour":24})",
+        R"({"renderTimeoutSec":1.5})",
+        R"({"availability":"MISSING"})",
+        R"({"excludedEngines":["WORKBENCH"]})",
+        R"({"scheduleEnabled":1})",
+        R"({"projectDirectories":[""]})",
+        R"({"hiddenProjects":{}})",
         R"({"benchmarkScore":-1})",
         R"({"benchmarkScore":1.5})",
         R"({"benchmarkScore":18446744073709551615})",

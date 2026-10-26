@@ -49,6 +49,7 @@ class JobExecutor {
     ~JobExecutor();
     void handle(const network::NetworkEvent& event);
     std::vector<ExecutorEvent> drainEvents();
+    std::optional<protocol::Progress> progress() const;
 
   private:
     struct Impl;
