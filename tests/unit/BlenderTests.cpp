@@ -3,6 +3,7 @@
 #include "blender/BlenderInstaller.h"
 #include "blender/GpuInfoService.h"
 #include "blender/Process.h"
+#include "blender/RenderProcess.h"
 #include "jobs/JobExecutor.h"
 #include "jobs/ResultAssembler.h"
 #include "projects/ProjectLibrary.h"
@@ -12,7 +13,9 @@
 #include <gtest/gtest.h>
 #include <zip.h>
 
+#include <algorithm>
 #include <condition_variable>
+#include <cstdlib>
 #include <sstream>
 
 using namespace blendnet;
@@ -357,6 +360,95 @@ TEST_F(BlenderTest, ProjectMetadataAndPortableArchivePreserveOnlySelectedDepende
         projects::ProjectLibrary::package(*binary.value, *info.value, directory.path() / "bad.zip"),
         BlenderError::InvalidRequest);
     EXPECT_FALSE(std::filesystem::exists(directory.path() / "bad.zip"));
+}
+TEST(BlenderProjectIntegrationTest, EssentialsWeakReferencesAllowPackagingAndRendering) {
+    const auto* cache = std::getenv("BLENDNET_REAL_BLENDER_CACHE");
+    const auto* version = std::getenv("BLENDNET_REAL_BLENDER_VERSION");
+    if (!cache || !version)
+        GTEST_SKIP() << "Set BLENDNET_REAL_BLENDER_CACHE and BLENDNET_REAL_BLENDER_VERSION "
+                        "to test with a verified Blender 4.3+ installation";
+    const auto binary = BlenderInstaller(std::filesystem::path(cache)).ensureVersion(version);
+    ASSERT_TRUE(binary) << toString(binary.error);
+    test::TemporaryDirectory directory;
+    const auto project = directory.path() / "project";
+    std::filesystem::create_directories(project);
+    const auto scene = project / "scene.blend";
+    const auto script = R"PY(
+import bpy, sys
+s=bpy.context.scene
+s.render.engine='CYCLES'
+s.cycles.samples=1
+s.cycles.use_denoising=False
+s.render.resolution_x=s.render.resolution_y=32
+s.render.resolution_percentage=100
+s.render.image_settings.file_format='PNG'
+s.frame_start=s.frame_end=1
+bpy.ops.wm.save_as_mainfile(filepath=sys.argv[sys.argv.index('--')+1])
+paths=bpy.utils.blend_paths(absolute=True, packed=False, local=False)
+print('ESSENTIALS_REFERENCE:' + str(any('essentials_brushes-' in p for p in paths)), flush=True)
+)PY";
+    const auto created = detail::runBlender(
+        *binary.value,
+        {"-b", "--python-exit-code", "72", "--python-expr", script, "--", utf8(scene)},
+        nullptr, 60s);
+    ASSERT_EQ(created.error, BlenderError::None) << created.out << created.err;
+    ASSERT_NE(created.out.find("ESSENTIALS_REFERENCE:True"), std::string::npos)
+        << "This regression requires Blender's Essentials brush weak references";
+    const auto originalHash = transfer::sha256File(scene);
+    ASSERT_TRUE(originalHash);
+    const auto info = projects::ProjectLibrary::inspect(*binary.value, scene);
+    ASSERT_TRUE(info) << toString(info.error);
+    EXPECT_TRUE(info.value->dependencies.empty());
+    const auto zip = directory.path() / "export/project.zip";
+    ASSERT_EQ(projects::ProjectLibrary::package(*binary.value, *info.value, zip),
+              BlenderError::None);
+    const auto unpacked = directory.path() / "client";
+    ASSERT_TRUE(archive::ZipService::extractProject(zip, unpacked));
+    EXPECT_EQ(transfer::sha256File(scene).value, originalHash.value);
+    const auto portable = projects::ProjectLibrary::inspect(*binary.value, unpacked / "scene.blend");
+    ASSERT_TRUE(portable);
+    EXPECT_TRUE(portable.value->dependencies.empty());
+    RenderRequest request;
+    request.scene = unpacked / "scene.blend";
+    request.outputDirectory = directory.path() / "frames";
+    request.task = {"essentials", "chunk", 1, 1, 1, "frame_####", "PNG"};
+    request.timeout = 60s;
+    const auto rendered = RenderProcess::run(*binary.value, request);
+    ASSERT_TRUE(rendered) << toString(rendered.error) << rendered.diagnostic;
+    EXPECT_EQ(rendered.value->frames.size(), 1u);
+
+    // A real linked library with the same suffix must still be checked and rejected
+    // outside the project. The weak-reference exemption cannot hide linked data.
+    const auto linked = project / "linked.blend";
+    const auto library = directory.path() /
+                         "external/5.2/datafiles/assets/brushes/essentials_brushes-gp_draw.blend";
+    std::filesystem::create_directories(library.parent_path());
+    const auto linkScript = R"PY(
+import bpy, sys
+args=sys.argv[sys.argv.index('--')+1:]
+asset=args[1]
+bpy.ops.wm.save_as_mainfile(filepath=asset)
+bpy.ops.wm.read_factory_settings()
+bpy.data.objects.remove(bpy.data.objects['Cube'], do_unlink=True)
+with bpy.data.libraries.load(asset, link=True) as (source, target):
+    target.objects=['Cube']
+bpy.context.scene.collection.objects.link(target.objects[0])
+bpy.ops.wm.save_as_mainfile(filepath=args[0])
+)PY";
+    const auto loaded = detail::runBlender(
+        *binary.value,
+        {"-b", "--python-exit-code", "72", "--python-expr", linkScript, "--", utf8(linked),
+         utf8(library)},
+        nullptr, 60s);
+    ASSERT_EQ(loaded.error, BlenderError::None) << loaded.out << loaded.err;
+    const auto linkedInfo = projects::ProjectLibrary::inspect(*binary.value, linked);
+    ASSERT_TRUE(linkedInfo);
+    EXPECT_NE(std::find(linkedInfo.value->dependencies.begin(), linkedInfo.value->dependencies.end(),
+                        library),
+              linkedInfo.value->dependencies.end());
+    EXPECT_EQ(projects::ProjectLibrary::package(*binary.value, *linkedInfo.value,
+                                              directory.path() / "linked.zip"),
+              BlenderError::InvalidRequest);
 }
 TEST_F(BlenderTest, InstallationIsVerifiedAndReusedOffline) {
     const auto binary = install();

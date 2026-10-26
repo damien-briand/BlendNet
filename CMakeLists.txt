@@ -294,6 +294,9 @@ if(BUILD_TESTING)
     set_tests_properties(blendnet-jobs PROPERTIES TIMEOUT 60)
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME blendnet-project-dependencies COMMAND "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/integration/project_dependencies.py"
+            "${PROJECT_SOURCE_DIR}/src/core/projects/ProjectLibrary.cpp")
         add_test(NAME blendnet-cli-network COMMAND "${Python3_EXECUTABLE}"
             "${PROJECT_SOURCE_DIR}/tests/integration/cli_network.py"
             "$<TARGET_FILE:blendnet-server-cli>" "$<TARGET_FILE:blendnet-cli>")

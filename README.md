@@ -96,6 +96,10 @@ La résolution et les autres réglages de scène se préparent dans Blender. L'a
 contient le `.blend`, ses dépendances détectées et le dossier supplémentaire choisi ;
 les autres fichiers voisins ne sont pas ajoutés automatiquement. Les originaux restent
 inchangés : les chemins sont adaptés dans des copies destinées au partage.
+Les références aux brosses **Essentials** fournies avec Blender servent à l'édition :
+elles ne sont pas à transférer et ne bloquent pas le partage, même si leur chemin
+pointe vers une installation Snap. Une bibliothèque réellement liée à la scène reste
+une dépendance à fournir, quelle que soit son origine.
 Les séquences de textures, UDIM et caches d'extensions peuvent nécessiter une préparation
 manuelle. Le dossier de travail utilisé pour créer l'archive doit rester **hors du dossier
 du projet**. **Retirer** masque un projet dans la bibliothèque sans effacer ses fichiers.

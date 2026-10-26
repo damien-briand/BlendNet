@@ -19,6 +19,31 @@ constexpr auto inspection = R"PY(
 import bpy, json, os
 s=bpy.context.scene
 deps=set(bpy.utils.blend_paths(absolute=True, packed=False, local=False))
+# Blender 4.3+ reports Paint's Essentials brush weak references as file paths,
+# even in a new scene with no linked data. They are editing preferences, resolved
+# against each installation's bundled assets, not files required by the render.
+# Match the declared Essentials reference, never all paths containing "assets".
+essential_brush_suffixes=set()
+for scene in bpy.data.scenes:
+    for prop in scene.tool_settings.bl_rna.properties:
+        if prop.type != 'POINTER': continue
+        paint=getattr(scene.tool_settings, prop.identifier, None)
+        if not isinstance(paint, bpy.types.Paint): continue
+        ref=getattr(paint, 'brush_asset_reference', None)
+        if not ref or ref.asset_library_type != 'ESSENTIALS': continue
+        relative=ref.relative_asset_identifier.replace('\\', '/')
+        library, separator, asset=relative.partition('.blend/')
+        if not separator or not asset.startswith('Brush/'): continue
+        parts=library.split('/')
+        if any(part in ('', '.', '..') for part in parts): continue
+        suffix='/datafiles/assets/'+library+'.blend'
+        essential_brush_suffixes.add(os.path.normcase(suffix).replace('\\', '/'))
+linked_libraries={os.path.normcase(os.path.realpath(bpy.path.abspath(lib.filepath, library=lib.parent)))
+                  for lib in bpy.data.libraries}
+deps={p for p in deps
+      if os.path.normcase(os.path.realpath(p)) in linked_libraries
+      or not any(os.path.normcase(os.path.normpath(p)).replace('\\', '/').endswith(suffix)
+                 for suffix in essential_brush_suffixes)}
 for obj in bpy.data.objects:
     for mod in obj.modifiers:
         domain=getattr(mod, 'domain_settings', None)

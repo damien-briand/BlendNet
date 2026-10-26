@@ -47,6 +47,11 @@ inchangés. Le manifeste P7 sélectionne la scène principale.
 
 Les dépendances doivent exister dans le dossier du projet ou ses sous-dossiers.
 Les dépendances externes doivent être regroupées dans ce dossier avant le partage.
+Les références d'outils aux brosses **Essentials** fournies par Blender sont exclues
+de cette liste : elles servent à l'édition et ne sont pas nécessaires au rendu.
+Leur chemin peut provenir d'une autre installation, notamment Snap. Cette exception
+ne s'applique pas aux bibliothèques réellement liées à la scène, même si elles se
+trouvent dans les assets de Blender : elles restent soumises aux contrôles habituels.
 Les séquences/UDIM non résolues et les caches d'extensions non déclarés demandent
 une préparation explicite du projet. Aucun fichier manquant n'est silencieusement
 ignoré. La destination du ZIP doit être hors du dossier du projet. Les limites et
@@ -120,8 +125,24 @@ python3 tests/integration/gui_flow.py ./build/blendnet ./build/blendnet-cli \
     4.2.1 "$PWD/.cache/blender" "$PWD/.cache/p8/gui"
 ```
 
-Il ouvre deux instances, ajoute le dossier par les widgets, sélectionne le projet,
-configure la source par saisie clavier, accepte la popup avec Entrée et vérifie les
+Le test `blendnet-project-dependencies` vérifie aussi les références Essentials,
+les anciens chemins Snap, les bibliothèques réellement liées et les caches de simulation,
+sans télécharger Blender. Pour vérifier la préparation, l'extraction et le rendu CPU
+d'une scène contenant ces références avec une installation vérifiée de Blender 4.3
+ou ultérieur (5.2.2 validé) :
+
+```sh
+BLENDNET_REAL_BLENDER_CACHE="$PWD/.cache/blender" \
+BLENDNET_REAL_BLENDER_VERSION=5.2.2 \
+./build/blendnet-tests \
+    --gtest_filter=BlenderProjectIntegrationTest.EssentialsWeakReferencesAllowPackagingAndRendering
+```
+
+Le cache doit être accessible en écriture ; si la version manque, l'installateur la
+télécharge. Sans ces variables, ce test réel est ignoré dans la suite quotidienne.
+
+Le test graphique ouvre deux instances, ajoute le dossier par les widgets,
+sélectionne le projet, configure la source par saisie clavier, accepte la popup avec Entrée et vérifie les
 trois PNG 32×32 de deux chunks réels. Il contrôle aussi le pin, FR/EN, la rétention
 et les captures. Les scripts de saisie temporaires contenant le token de test sont
 supprimés à la fin. Pour isoler les fenêtres sous X11, un affichage Xephyr/Xvfb peut
@@ -138,7 +159,7 @@ Les validations GPU physiques, Windows et macOS restent à effectuer. La vérifi
 ASan/UBSan utilise la suppression optionnelle et ciblée de libp11-kit documentée en
 [P6](blender-p6.md), sans désactiver les autres contrôles de fuite.
 
-Validation Linux CPU : **11/11 tests CTest réussis** en compilation complète
+Validation initiale P8 sous Linux CPU : **11/11 tests CTest réussis** en compilation complète
 CMake/Make et en headless ASan/UBSan avec la suppression système ci-dessus.
 La suite couvre 88 tests unitaires, 12 réseau, 6 transfert, 4 jobs et 4 scénarios
 du contrôleur graphique. Les fenêtres Source et Client ont aussi exécuté le
