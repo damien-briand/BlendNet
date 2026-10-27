@@ -4,6 +4,8 @@
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <charconv>
+#include <chrono>
+#include <ctime>
 #include <imgui_stdlib.h>
 #include <iomanip>
 #include <sstream>
@@ -33,7 +35,14 @@ std::string chunkName(std::string_view id) {
     return std::string(id.substr(0, 12));
 }
 std::string date(std::filesystem::file_time_type time) {
-    const auto t = std::chrono::system_clock::to_time_t(std::chrono::file_clock::to_sys(time));
+#ifdef _MSVC_STL_VERSION
+    // MSVC exposes file_clock::to_utc instead of to_sys; clock_cast handles
+    // the conversion through UTC, including its leap-second adjustment.
+    const auto systemTime = std::chrono::clock_cast<std::chrono::system_clock>(time);
+#else
+    const auto systemTime = std::chrono::file_clock::to_sys(time);
+#endif
+    const auto t = std::chrono::system_clock::to_time_t(systemTime);
     std::tm local{};
 #ifdef _WIN32
     localtime_s(&local, &t);
