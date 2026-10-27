@@ -23,6 +23,7 @@ include(CTest)
 include(cmake/BuildOptions.cmake)
 
 find_package(Threads REQUIRED)
+include(cmake/CheckCxx20Threads.cmake)
 find_package(OpenSSL 1.1.1 REQUIRED)
 find_path(ASIO_INCLUDE_DIR asio.hpp REQUIRED)
 find_package(ZLIB REQUIRED) # Dépendance de libzip, CRC des images PNG.

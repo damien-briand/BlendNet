@@ -123,6 +123,15 @@ sur un runner natif distinct. La cible de déploiement de l'application est macO
 la compatibilité réelle dépend aussi des versions des bibliothèques utilisées et
 reste à confirmer sur les machines cibles.
 
+CMake vérifie la compilation et l'édition des liens de `std::jthread`,
+`std::stop_token` et des attentes annulables. Avec Xcode 16.x, si ces fonctions
+nécessitent `-fexperimental-library`, l'option est ajoutée à la compilation C++
+et à l'édition des liens de l'application et des tests. Une bibliothèque standard
+qui les fournit directement conserve sa configuration normale. Si aucune des deux
+configurations ne fonctionne, CMake signale l'incompatibilité dès la configuration.
+Apple indique que ces fonctions sont sorties de cette option expérimentale dans
+[Xcode 26](https://developer.apple.com/documentation/xcode-release-notes/xcode-26-release-notes).
+
 ## Ressources distribuées
 
 Seul le composant CMake **Runtime** est inclus : application, deux CLI, bibliothèques

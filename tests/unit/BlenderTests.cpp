@@ -11,6 +11,7 @@
 #include "transfer/TransferEngine.h"
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 #include <zip.h>
 
 #include <algorithm>
@@ -466,6 +467,30 @@ TEST_F(BlenderTest, InstallationIsVerifiedAndReusedOffline) {
     EXPECT_GT(gpu.value->gpu.ramMB, 0);
     EXPECT_EQ(gpu.value->gpu.backend, "CPU");
     EXPECT_EQ(gpu.value->availableBackends.size(), 2);
+}
+TEST_F(BlenderTest, CachedVersionRequiresAnExactStringAndAcceptsABoundedStringView) {
+    const auto binary = install();
+    ASSERT_TRUE(binary);
+    failDownload = true;
+    const auto manifest = cache / release.key / "manifest.json";
+    const auto original = nlohmann::json::parse(test::readFile(manifest));
+    const std::string versionWithSuffix = "4.2.1.trailing";
+    const std::string_view version(versionWithSuffix.data(), 5);
+    ASSERT_TRUE(BlenderInstaller(cache, download).ensureVersion(version));
+    for (const auto& invalid :
+         {nlohmann::json(nullptr), nlohmann::json(421), nlohmann::json(true),
+          nlohmann::json::array({"4.2.1"}), nlohmann::json::object({{"value", "4.2.1"}}),
+          nlohmann::json("4.2.0"), nlohmann::json("4.2.1.trailing")}) {
+        SCOPED_TRACE(invalid.dump());
+        auto changed = original;
+        changed["version"] = invalid;
+        test::writeFile(manifest, changed.dump());
+        EXPECT_EQ(BlenderInstaller(cache, download).ensureVersion(version).error,
+                  BlenderError::CacheCorrupt);
+    }
+    test::writeFile(manifest, original.dump());
+    EXPECT_TRUE(BlenderInstaller(cache, download).ensureVersion(version));
+    EXPECT_EQ(requests, 2);
 }
 TEST_F(BlenderTest, WrongChecksumDeletesArchiveAndNeverIssuesAnExecutable) {
     badChecksum = true;

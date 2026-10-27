@@ -318,7 +318,8 @@ BlenderResult<VerifiedBlender> BlenderInstaller::ensureVersion(std::string_view 
                     return {{}, BlenderError::CacheCorrupt};
                 std::ifstream input(manifest);
                 const auto data = Json::parse(input);
-                if (data.at("format") != "blendnet-blender-v1" || data.at("version") != version ||
+                if (data.at("format") != "blendnet-blender-v1" ||
+                    data.at("version").get<std::string>() != std::string(version) ||
                     data.at("release") != release.value->key ||
                     data.at("archiveSha256").get<std::string>().size() != 64 ||
                     data.at("treeSha256").get<std::string>().size() != 64)
