@@ -1,0 +1,21 @@
+# Resolve Mach-O dependencies into the application, then sign the relocated bundle.
+include(BundleUtilities)
+include("@PROJECT_SOURCE_DIR@/cmake/BrewNotices.cmake")
+set(_bundle "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/BlendNet.app")
+set(BLENDNET_NOTICES_DESTINATION "${_bundle}/Contents/Resources/licenses/dependencies")
+function(gp_resolved_file_type_override resolved_file type_var)
+    # BundleUtilities calls this hook for each resolved prerequisite, including
+    # transitive dylibs. Keep its classification, and copy any upstream notices.
+    blendnet_brew_notices("${resolved_file}" _name _notices)
+    if(_notices)
+        file(MAKE_DIRECTORY "${BLENDNET_NOTICES_DESTINATION}/${_name}")
+        file(COPY ${_notices} DESTINATION "${BLENDNET_NOTICES_DESTINATION}/${_name}")
+    endif()
+endfunction()
+fixup_bundle("${_bundle}" "${_bundle}/Contents/MacOS/blendnet-cli;${_bundle}/Contents/MacOS/blendnet-server-cli"
+    "@CMAKE_PREFIX_PATH@;@BLENDNET_RUNTIME_SEARCH_DIRS@")
+execute_process(COMMAND codesign --force --deep --sign - "${_bundle}"
+    RESULT_VARIABLE _signed ERROR_VARIABLE _error)
+if(NOT _signed EQUAL 0)
+    message(FATAL_ERROR "Could not ad-hoc sign the application: ${_error}")
+endif()

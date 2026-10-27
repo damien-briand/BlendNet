@@ -4,7 +4,9 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <barrier>
 #include <fstream>
+#include <thread>
 
 using namespace blendnet;
 using namespace blendnet::transfer;
@@ -202,6 +204,29 @@ TEST(TransferTest, QuotaReservationsApplyAcrossPeersAndSurviveRestart) {
     const auto accepted = resumed.receive(offer);
     ASSERT_TRUE(accepted);
     EXPECT_EQ(std::get<protocol::FileAck>(*accepted).nextSeq, 0);
+}
+
+// P9 / RF-24: concurrent sources cannot both spend the same remaining budget.
+TEST(TransferTest, ConcurrentPeersReserveOneSharedDiskBudget) {
+    const test::TemporaryDirectory directory;
+    const TransferOptions options{directory.path() / "received", 100};
+    std::filesystem::create_directories(options.directory);
+    TransferReceiver first(options, "first"), second(options, "second");
+    const protocol::FileBegin offer{"job", "PROJECT_ZIP", 80, std::string(64, '0'), 10};
+    std::barrier start(3);
+    std::optional<protocol::Message> a, b;
+    std::jthread one([&] { start.arrive_and_wait(); a = first.receive(offer); });
+    std::jthread two([&] { start.arrive_and_wait(); b = second.receive(offer); });
+    start.arrive_and_wait();
+    one.join();
+    two.join();
+    ASSERT_TRUE(a);
+    ASSERT_TRUE(b);
+    EXPECT_NE(std::holds_alternative<protocol::FileAck>(*a),
+              std::holds_alternative<protocol::FileAck>(*b));
+    const auto& rejected = std::holds_alternative<protocol::FileErr>(*a) ? *a : *b;
+    ASSERT_TRUE(std::holds_alternative<protocol::FileErr>(rejected));
+    EXPECT_EQ(std::get<protocol::FileErr>(rejected).reason, "disk_full");
 }
 TEST(TransferTest, InvalidBlocksConflictingOffersAndConcurrentWritersCannotCorruptAPartialFile) {
     const test::TemporaryDirectory directory;

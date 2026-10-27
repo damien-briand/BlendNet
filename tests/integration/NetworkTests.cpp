@@ -252,6 +252,52 @@ TEST_F(NetworkIntegration, SilentTlsHandshakeHasADeadlineAndStopCancelsPendingOp
     EXPECT_LT(std::chrono::steady_clock::now() - started, 1s);
 }
 
+// P9 / RNF-S1: malformed input must close only the offending TLS connection.
+TEST_F(NetworkIntegration, MalformedPayloadsOfEveryMessageTypeCloseCleanly) {
+    for (const auto type : {0, 1, 2, 3, 4, 5, 6, 10, 11, 12, 20, 21, 22, 23, 24, 25, 26,
+                            30, 31, 32, 33, 34}) {
+        SCOPED_TRACE(type);
+        RawPeer peer(options.port);
+        peer.send(protocol::Hello{1, "fuzz", "test", identity.token});
+        ASSERT_TRUE(std::holds_alternative<protocol::HelloOk>(peer.receive()));
+        peer.send(clientOptions.gpu);
+        peer.send(clientOptions.preferences);
+        ASSERT_TRUE(waitFor([this] { return server.snapshot().clients.size() == 1; }));
+        protocol::Bytes bytes{std::uint8_t(protocol::protocolMagic >> 8),
+                              std::uint8_t(protocol::protocolMagic), 0, std::uint8_t(type),
+                              0, 0, 0, 0, 0, 0, 0, 1, '{'};
+        asio::write(peer.stream, asio::buffer(bytes));
+        ASSERT_TRUE(serverError(NetworkError::ProtocolViolation));
+        EXPECT_TRUE(server.snapshot().clients.empty());
+    }
+    ASSERT_EQ(client.start(clientOptions), NetworkError::None);
+    EXPECT_TRUE(registered());
+}
+
+TEST_F(NetworkIntegration, AuthenticatedButIncompleteRegistrationStillTimesOut) {
+    RawPeer peer(options.port);
+    peer.send(protocol::Hello{1, "slow", "test", identity.token});
+    ASSERT_TRUE(std::holds_alternative<protocol::HelloOk>(peer.receive()));
+    ASSERT_TRUE(serverError(NetworkError::Timeout));
+    EXPECT_TRUE(server.snapshot().clients.empty());
+}
+
+TEST_F(NetworkIntegration, IncompleteFrameDoesNotKeepTheConnectionAlive) {
+    RawPeer peer(options.port);
+    peer.send(protocol::Hello{1, "slow", "test", identity.token});
+    ASSERT_TRUE(std::holds_alternative<protocol::HelloOk>(peer.receive()));
+    peer.send(clientOptions.gpu);
+    peer.send(clientOptions.preferences);
+    ASSERT_TRUE(waitFor([this] { return server.snapshot().clients.size() == 1; }));
+    auto bytes = protocol::ProtocolCodec::encode(protocol::Ping{});
+    ASSERT_TRUE(bytes);
+    // A valid header whose announced payload is never completed.
+    bytes.value->resize(protocol::headerBytes);
+    asio::write(peer.stream, asio::buffer(*bytes.value));
+    ASSERT_TRUE(serverError(NetworkError::Timeout));
+    EXPECT_TRUE(server.snapshot().clients.empty());
+}
+
 TEST_F(NetworkIntegration, ClientTimesOutWhenTheSourceStopsAnsweringHeartbeats) {
     server.stop();
     asio::io_context io;

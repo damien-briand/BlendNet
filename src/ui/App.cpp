@@ -1,5 +1,7 @@
 #include "App.h"
 #include "Views.h"
+#include "config/RuntimePaths.h"
+#include "config/Utf8Path.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -8,7 +10,9 @@
 #include <GLFW/glfw3.h>
 
 #include <cstdio>
+#include <cstring>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <vector>
 
@@ -84,13 +88,28 @@ AppError App::run(const AppSettings& settings, const std::filesystem::path& conf
     style.Colors[ImGuiCol_FrameBg] = {.12F, .16F, .21F, 1};
     style.Colors[ImGuiCol_PlotHistogram] = {.28F, .76F, .65F, 1};
     style.Colors[ImGuiCol_Header] = {.12F, .34F, .35F, 1};
-    for (const auto* font :
-         {"/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-          "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "C:/Windows/Fonts/segoeui.ttf",
-          "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"})
-        if (std::filesystem::exists(font)) {
-            io.Fonts->AddFontFromFileTTF(font, 17.F);
-            break;
+    const auto packagedFont = bundledFont();
+    for (const auto& font :
+         {packagedFont, pathFromUtf8("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"),
+          pathFromUtf8("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+          pathFromUtf8("C:/Windows/Fonts/segoeui.ttf"),
+          pathFromUtf8("/System/Library/Fonts/Supplemental/Arial Unicode.ttf")})
+        if (!font.empty() && std::filesystem::is_regular_file(font)) {
+            // A filesystem stream also accepts Unicode paths on Windows.
+            std::ifstream file(font, std::ios::binary);
+            std::vector<char> data((std::istreambuf_iterator<char>(file)), {});
+            if (!data.empty()) {
+                ImFontConfig config;
+                // The atlas needs the source data until destruction (dynamic glyph loading).
+                void* owned = IM_ALLOC(data.size());
+                if (owned) {
+                    std::memcpy(owned, data.data(), data.size());
+                    config.FontDataOwnedByAtlas = true;
+                    io.Fonts->AddFontFromMemoryTTF(owned, static_cast<int>(data.size()), 17.F,
+                                                &config);
+                    break;
+                }
+            }
         }
     if (!ImGui_ImplGlfw_InitForOpenGL(window.get(), true)) {
         return AppError::ImGuiInitFailed;

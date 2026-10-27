@@ -94,9 +94,9 @@ Changer le backend ou la version invalide le score du benchmark précédent.
   à blender.org. La redirection de port reste manuelle, sans UPnP ni relais.
 - L'historique graphique et le journal affiché sont bornés pour la session.
   Le journal disque habituel reste dans `logs/blendnet.log` près de la configuration.
-- Les polices Unicode du système sont utilisées (Noto Sans/DejaVu sous Linux,
-  Segoe UI sous Windows, Arial Unicode sous macOS). La distribution des polices
-  dans les paquets reste du ressort de P9.
+- Les paquets [P9](fiabilite-packaging-p9.md) embarquent DejaVu Sans. Pour une
+  exécution depuis la compilation, les polices Unicode du système servent de repli
+  (Noto Sans/DejaVu sous Linux, Segoe UI sous Windows, Arial Unicode sous macOS).
 
 ## Architecture et vérification
 

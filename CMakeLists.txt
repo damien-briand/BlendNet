@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.21)
 
+if(CMAKE_HOST_APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS deployment target")
+endif()
+
 project(BlendNet VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -16,6 +20,7 @@ set(BLENDNET_BLENDER_TEST_CACHE "${PROJECT_SOURCE_DIR}/.cache/blender" CACHE PAT
 
 include(FetchContent)
 include(CTest)
+include(cmake/BuildOptions.cmake)
 
 find_package(Threads REQUIRED)
 find_package(OpenSSL 1.1.1 REQUIRED)
@@ -84,7 +89,9 @@ endfunction()
 # Bibliothèque indépendante de toute interface graphique.
 add_library(blendnet-core STATIC
     src/core/config/AppSettings.cpp
+    src/core/config/RuntimePaths.cpp
     src/core/log/Logger.cpp
+    src/core/log/LogExporter.cpp
     src/core/protocol/ProtocolCodec.cpp
     src/core/network/NetworkTypes.cpp
     src/core/network/Security.cpp
@@ -127,6 +134,7 @@ if(WIN32)
     target_link_libraries(blendnet-core PRIVATE ws2_32 mswsock)
     target_compile_definitions(blendnet-core PRIVATE _WIN32_WINNT=0x0A00)
 endif()
+
 blendnet_warnings(blendnet-core)
 add_library(blendnet-i18n STATIC src/ui/I18n.cpp)
 target_include_directories(blendnet-i18n PUBLIC "${PROJECT_SOURCE_DIR}/src/ui")
@@ -346,3 +354,9 @@ if(BUILD_TESTING)
         endif()
     endif()
 endif()
+
+if(BLENDNET_BUILD_FUZZER)
+    add_subdirectory(tests/protocol-fuzz)
+endif()
+
+include(cmake/Packaging.cmake)

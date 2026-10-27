@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=BlendNet
+Comment=Distributed Blender rendering
+Comment[fr]=Rendu Blender distribué
+Exec=blendnet
+Icon=blendnet
+Terminal=false
+Categories=Graphics;3DGraphics;
+Keywords=Blender;Render;Network;
+StartupWMClass=BlendNet

@@ -1,8 +1,10 @@
 #include "TemporaryDirectory.h"
+#include "log/LogExporter.h"
 #include "log/Logger.h"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -12,6 +14,38 @@
 
 using namespace blendnet;
 using namespace blendnet::test;
+
+TEST(LogExportTest, ReplacesAtomicallyRedactsTokensAndEscapesMultilineEntries) {
+    const TemporaryDirectory directory;
+    const auto path = directory.path() / "support.log";
+    writeFile(path, "old content");
+    const std::string token(64, 'a');
+    const std::vector<std::string> entries{"2026-10-26T12:00:00Z ready", "detail " + token +
+                                                                    "\nforged\rentry"};
+    const std::vector<std::string> secrets{token, ""};
+    ASSERT_EQ(exportLog(path, entries, secrets), LogError::None);
+    const auto result = readFile(path);
+    EXPECT_EQ(result.find(token), std::string::npos);
+    EXPECT_NE(result.find("[redacted]\\nforged\\rentry"), std::string::npos);
+    EXPECT_EQ(std::count(result.begin(), result.end(), '\n'), 2);
+    EXPECT_EQ(std::distance(std::filesystem::directory_iterator(directory.path()),
+                            std::filesystem::directory_iterator{}), 1);
+}
+
+TEST(LogExportTest, RejectsInvalidDestinationsWithoutDamagingExistingFiles) {
+    const TemporaryDirectory directory;
+    const std::vector<std::string> entries{"new entry"};
+    EXPECT_EQ(exportLog(directory.path(), entries), LogError::OpenFailed);
+    EXPECT_NE(exportLog(directory.path() / "absent/support.log", entries), LogError::None);
+    const auto target = directory.path() / "original.log";
+    writeFile(target, "keep");
+#ifndef _WIN32
+    const auto link = directory.path() / "link.log";
+    std::filesystem::create_symlink(target, link);
+    EXPECT_EQ(exportLog(link, entries), LogError::OpenFailed);
+    EXPECT_EQ(readFile(target), "keep");
+#endif
+}
 
 TEST(LoggerTest, LevelsAndUtcTimestamp) {
     std::ostringstream output;

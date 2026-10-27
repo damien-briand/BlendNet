@@ -1,0 +1,171 @@
+name: Build, test and package
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Native / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-15-intel, macos-15]
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git libasio-dev libssl-dev \
+            zlib1g-dev libcurl4-openssl-dev libglfw3-dev libgl1-mesa-dev \
+            libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev xvfb xauth \
+            rpm patchelf file desktop-file-utils
+      - name: macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install asio openssl@3 curl libzip glfw nlohmann-json googletest reproc
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix curl):$(brew --prefix openssl@3):$(brew --prefix)" >> "$GITHUB_ENV"
+      - name: Windows dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://github.com/microsoft/vcpkg.git .cache/vcpkg
+          git -C .cache/vcpkg checkout 817892b0ecbc6af994dd6df999c73faf795adbf2
+          & .cache/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed" }
+          cmake -S . -B build -A x64 `
+            "-DCMAKE_TOOLCHAIN_FILE=$PWD/.cache/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows -DBLENDNET_BUILD_GUI=ON
+          if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
+      - name: Configure Unix
+        if: runner.os != 'Windows'
+        run: cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DBLENDNET_BUILD_GUI=ON
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+      - name: Tests
+        run: ctest --test-dir build -C Release --output-on-failure --timeout 180
+      - name: Install Runtime component
+        run: cmake --install build --config Release --component Runtime --prefix "${{ github.workspace }}/stage"
+      - name: Relocated Linux application
+        if: runner.os == 'Linux'
+        env:
+          LIBGL_ALWAYS_SOFTWARE: 1
+        run: xvfb-run -a python3 tests/integration/installed_package.py stage --gui
+      - name: Relocated macOS binaries
+        if: runner.os == 'macOS'
+        run: python3 tests/integration/installed_package.py stage
+      - name: Relocated Windows binaries
+        if: runner.os == 'Windows'
+        run: python tests/integration/installed_package.py stage
+      - name: Native packages
+        run: cpack --config build/CPackConfig.cmake -C Release
+      - name: Install Windows EXE
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem build/packages/*.exe | Select-Object -First 1).FullName
+          $destination = "$PWD/.cache/installed-exe"
+          $process = Start-Process -FilePath $installer -ArgumentList "/S", "/D=$destination" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "NSIS installation failed" }
+          python tests/integration/installed_package.py $destination
+          if ($LASTEXITCODE -ne 0) { throw "Installed EXE verification failed" }
+      - name: Install macOS DMG
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p .cache/installed-dmg
+          for image in build/packages/*.dmg; do
+            hdiutil attach "$image" -nobrowse -mountpoint "$RUNNER_TEMP/blendnet-dmg"
+            ditto "$RUNNER_TEMP/blendnet-dmg/BlendNet.app" .cache/installed-dmg/BlendNet.app
+            hdiutil detach "$RUNNER_TEMP/blendnet-dmg"
+          done
+          codesign --verify --deep --strict .cache/installed-dmg/BlendNet.app
+          python3 tests/integration/installed_package.py .cache/installed-dmg
+      - name: Linux RPM and AppImage
+        if: runner.os == 'Linux'
+        run: |
+          cpack --config build/CPackConfig.cmake -G RPM -C Release
+          mkdir -p .cache/p9
+          curl --fail --location --retry 3 -o .cache/p9/linuxdeploy.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+          echo 'c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  .cache/p9/linuxdeploy.AppImage' | sha256sum --check
+          chmod +x .cache/p9/linuxdeploy.AppImage
+          cpack --config build/CPackConfig.cmake -G External -C Release \
+            -D "CPACK_LINUXDEPLOY_EXECUTABLE=$PWD/.cache/p9/linuxdeploy.AppImage"
+          for package in build/packages/*.deb; do
+            sudo apt-get install -y "$PWD/$package"
+          done
+          xvfb-run -a python3 tests/integration/installed_package.py /usr --gui
+          for image in build/packages/*.AppImage; do
+            xvfb-run -a python3 tests/integration/appimage_package.py "$image" --gui
+          done
+      - name: Package and test logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: blendnet-${{ matrix.os }}
+          path: |
+            build/packages/*
+            !build/packages/_CPack_Packages/**
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  sanitizers-and-fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+      # Keep diagnostics local: downloading system debug symbols at process exit
+      # can exceed the CLI tests' deadlines, without changing their behavior.
+      DEBUGINFOD_URLS: ''
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake libasio-dev libssl-dev zlib1g-dev libcurl4-openssl-dev
+      - name: Configure
+        run: |
+          cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DBLENDNET_BUILD_GUI=OFF -DBLENDNET_SANITIZERS=ON -DBLENDNET_BUILD_FUZZER=ON
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: ASan and UBSan tests
+        env:
+          LSAN_OPTIONS: suppressions=${{ github.workspace }}/tests/sanitizers/lsan-system.supp
+        run: ctest --test-dir build --output-on-failure --timeout 180
+      - name: Fuzz all message schemas
+        run: |
+          python3 tests/protocol-fuzz/seed_corpus.py build/fuzz-corpus
+          mkdir -p build/fuzz-artifacts
+          build/tests/protocol-fuzz/blendnet-protocol-fuzz build/fuzz-corpus \
+            -seed=12345 -max_total_time=60 -max_len=65548 -timeout=5 \
+            -artifact_prefix=build/fuzz-artifacts/
+      - name: Diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: blendnet-sanitizers-fuzz
+          path: |
+            build/Testing/Temporary/LastTest.log
+            build/fuzz-artifacts/
+          if-no-files-found: warn

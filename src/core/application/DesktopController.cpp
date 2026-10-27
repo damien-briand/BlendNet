@@ -1,6 +1,7 @@
 #include "application/DesktopController.h"
 #include "blender/Benchmark.h"
 #include "config/Utf8Path.h"
+#include "log/LogExporter.h"
 #include "network/Security.h"
 #include "transfer/TransferEngine.h"
 
@@ -680,15 +681,16 @@ void DesktopController::excludeClient(std::string session, std::string job) {
 }
 void DesktopController::exportLogs(std::filesystem::path path) {
     m_impl->post([p = m_impl.get(), path = std::move(path)] {
-        const auto logs = p->state.logs;
-        p->task("exporting", [p, path, logs] {
-            if (std::filesystem::is_symlink(path))
-                throw std::runtime_error("Unsafe log path");
-            std::ofstream out(path);
-            for (const auto& log : logs)
-                out << log.time << ' ' << log.key << ' ' << log.detail << '\n';
-            out.close();
-            p->post([p, ok = bool(out)] { p->note(ok ? "export.done" : "operation.failed"); });
+        std::vector<std::string> entries, secrets{p->state.pairingToken};
+        for (const auto& log : p->state.logs)
+            entries.push_back(log.time + ' ' + log.key + ' ' + log.detail);
+        for (const auto& source : p->state.settings.knownSources)
+            secrets.push_back(source.token);
+        p->task("exporting", [p, path, entries = std::move(entries), secrets = std::move(secrets)] {
+            const auto result = exportLog(path, entries, secrets);
+            p->post([p, result] {
+                p->note(result == LogError::None ? "export.done" : "operation.failed");
+            });
         });
     });
 }

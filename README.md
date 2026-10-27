@@ -2,11 +2,47 @@
 
 Le rendu d'animations ou de scènes complexes sous Blender est une opération très coûteuse en ressources. Un seul poste de travail peut mettre plusieurs heures, voire plusieurs jours, à rendre une animation longue. BlendNet répartit les images à calculer entre plusieurs ordinateurs, avec un rendu CPU ou GPU selon leur matériel.
 
+- [Installation et paquets](#installation-et-paquets)
 - [Manuel d'utilisation](#manuel-dutilisation)
 - [Paramètres](#paramètres)
 - [Dépannage](#dépannage)
 - [Compilation](#compilation)
 - [Configuration et journal](#configuration-et-journal)
+
+## Installation et paquets
+
+Les paquets générés se trouvent dans `build/packages/` : `.deb`, `.rpm` et AppImage
+sous Linux, installateur `.exe` et ZIP sous Windows, `.dmg` sous macOS.
+Les formats Windows/macOS et RPM sont préparés pour la CI ; leur validation reste
+à confirmer. Une archive portable et les empreintes SHA-256 accompagnent les sorties.
+
+Sur Debian/Ubuntu, après génération du paquet :
+
+```sh
+sudo apt install ./build/packages/blendnet_0.1.0_amd64.deb
+blendnet
+```
+
+Avec l'AppImage, sans installation système :
+
+```sh
+chmod +x build/packages/BlendNet-0.1.0-Linux-x86_64.AppImage
+./build/packages/BlendNet-0.1.0-Linux-x86_64.AppImage
+```
+
+Sur Windows, utiliser l'installateur ou extraire le ZIP complet et lancer
+`bin/blendnet.exe`. Sur macOS, copier **BlendNet.app** depuis le DMG dans Applications.
+Les paquets contiennent la police, les bibliothèques nécessaires et la documentation ;
+Blender est téléchargé séparément lors de sa première utilisation.
+
+Pour générer les paquets depuis les sources, compiler puis lancer :
+
+```sh
+cpack --config build/CPackConfig.cmake
+```
+
+Les prérequis, les commandes RPM/AppImage et les limites de distribution sont décrits
+dans le [guide P9](docs/fiabilite-packaging-p9.md).
 
 ## Manuel d'utilisation
 
@@ -30,6 +66,7 @@ Après la [compilation](#compilation), lancer l'interface :
 ```
 
 Sur Windows, lancer `build\Debug\blendnet.exe` avec la configuration Debug.
+Sur macOS, lancer `build/BlendNet.app/Contents/MacOS/BlendNet`.
 Le premier démarrage crée automatiquement la configuration et propose un benchmark
 facultatif. **Plus tard** permet de continuer sans mesurer la puissance de la machine.
 
@@ -303,6 +340,13 @@ rendu, le suivi des jobs, les paramètres persistants et les traductions FR/EN.
 Voir le [parcours graphique P8](docs/interface-p8.md) pour préparer un projet,
 connecter une source et accepter un rendu.
 
+La phase **P9** ajoute les paquets CPack, les ressources et tests de démarrage après
+installation, le fuzzing Clang/ASan/UBSan, les contrôles de connexions TLS incomplètes,
+les tests de quotas concurrents et l'export atomique des journaux avec masquage des
+tokens. La CI prépare Linux, Windows et macOS Intel/Apple Silicon. Voir le
+[guide de fiabilité et packaging](docs/fiabilite-packaging-p9.md) pour les commandes
+et l'état des validations.
+
 Références : [cahier des charges](docs/cahier-des-charges-blendnet.md) et
 [phases P1 à P9](docs/blendnet-spécification-agent-ia-guide-developpement.md).
 
@@ -374,7 +418,7 @@ puis (renseigner `OPENSSL_ROOT_DIR` si nécessaire) :
 
 ```sh
 ./build.sh
-./build/blendnet
+./build/BlendNet.app/Contents/MacOS/BlendNet
 ```
 
 ### Mode sans interface
