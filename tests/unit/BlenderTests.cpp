@@ -453,7 +453,7 @@ bpy.ops.wm.save_as_mainfile(filepath=args[0])
 }
 TEST_F(BlenderTest, InstallationIsVerifiedAndReusedOffline) {
     const auto binary = install();
-    ASSERT_TRUE(binary) << toString(binary.error);
+    ASSERT_TRUE(binary) << toString(binary.error) << ": " << binary.diagnostic;
     EXPECT_EQ(binary.value->validate(), BlenderError::None);
     EXPECT_EQ(requests, 2);
     failDownload = true;

@@ -354,6 +354,8 @@ BlenderResult<VerifiedBlender> BlenderInstaller::ensureVersion(std::string_view 
         std::ifstream input(stage / "checksums");
         const std::string text{std::istreambuf_iterator<char>(input),
                                std::istreambuf_iterator<char>()};
+        // Windows cannot rename the staging directory while this file is open.
+        input.close();
         const auto expected = publishedChecksum(text, release.value->archiveName);
         if (!expected)
             return {{}, BlenderError::ChecksumMismatch};
@@ -409,8 +411,8 @@ BlenderResult<VerifiedBlender> BlenderInstaller::ensureVersion(std::string_view 
         return {VerifiedBlender(entry / "content", entry / "content" / release.value->executable,
                                 std::string(version), *digest.value),
                 BlenderError::None};
-    } catch (const std::exception&) {
-        return {{}, BlenderError::IoError};
+    } catch (const std::exception& error) {
+        return {{}, BlenderError::IoError, error.what()};
     }
 }
 } // namespace blendnet::blender

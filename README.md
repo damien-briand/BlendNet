@@ -2,6 +2,9 @@
 
 Le rendu d'animations ou de scènes complexes sous Blender est une opération très coûteuse en ressources. Un seul poste de travail peut mettre plusieurs heures, voire plusieurs jours, à rendre une animation longue. BlendNet répartit les images à calculer entre plusieurs ordinateurs, avec un rendu CPU ou GPU selon leur matériel.
 
+Le développement et la CI ciblent **Linux (Ubuntu)** et **Windows**. Le support
+macOS est mis en pause.
+
 - [Installation et paquets](#installation-et-paquets)
 - [Manuel d'utilisation](#manuel-dutilisation)
 - [Paramètres](#paramètres)
@@ -12,8 +15,8 @@ Le rendu d'animations ou de scènes complexes sous Blender est une opération tr
 ## Installation et paquets
 
 Les paquets générés se trouvent dans `build/packages/` : `.deb`, `.rpm` et AppImage
-sous Linux, installateur `.exe` et ZIP sous Windows, `.dmg` sous macOS.
-Les formats Windows/macOS et RPM sont préparés pour la CI ; leur validation reste
+sous Linux, installateur `.exe` et ZIP sous Windows.
+Les formats Windows et RPM sont préparés pour la CI ; leur validation reste
 à confirmer. Une archive portable et les empreintes SHA-256 accompagnent les sorties.
 
 Sur Debian/Ubuntu, après génération du paquet :
@@ -31,7 +34,7 @@ chmod +x build/packages/BlendNet-0.1.0-Linux-x86_64.AppImage
 ```
 
 Sur Windows, utiliser l'installateur ou extraire le ZIP complet et lancer
-`bin/blendnet.exe`. Sur macOS, copier **BlendNet.app** depuis le DMG dans Applications.
+`bin/blendnet.exe`.
 Les paquets contiennent la police, les bibliothèques nécessaires et la documentation ;
 Blender est téléchargé séparément lors de sa première utilisation.
 
@@ -66,7 +69,6 @@ Après la [compilation](#compilation), lancer l'interface :
 ```
 
 Sur Windows, lancer `build\Debug\blendnet.exe` avec la configuration Debug.
-Sur macOS, lancer `build/BlendNet.app/Contents/MacOS/BlendNet`.
 Le premier démarrage crée automatiquement la configuration et propose un benchmark
 facultatif. **Plus tard** permet de continuer sans mesurer la puissance de la machine.
 
@@ -301,7 +303,7 @@ l'historique visuel sont limités à la session ; le journal disque est décrit
 [plus bas](#configuration-et-journal).
 
 Le parcours complet est actuellement validé sous **Linux avec rendu CPU**. La validation
-sur GPU physique, Windows et macOS reste à effectuer. Pour les détails du parcours
+sur GPU physique et Windows reste à effectuer. Pour les détails du parcours
 graphique, consulter le [guide de l'interface](docs/interface-p8.md).
 
 ## État du développement
@@ -343,7 +345,7 @@ connecter une source et accepter un rendu.
 La phase **P9** ajoute les paquets CPack, les ressources et tests de démarrage après
 installation, le fuzzing Clang/ASan/UBSan, les contrôles de connexions TLS incomplètes,
 les tests de quotas concurrents et l'export atomique des journaux avec masquage des
-tokens. La CI prépare Linux, Windows et macOS Intel/Apple Silicon. Voir le
+tokens. La CI prépare Ubuntu et Windows. Voir le
 [guide de fiabilité et packaging](docs/fiabilite-packaging-p9.md) pour les commandes
 et l'état des validations.
 
@@ -411,16 +413,6 @@ ctest --test-dir build -C Debug --output-on-failure
 .\build\Debug\blendnet.exe
 ```
 
-### macOS
-
-Installer les outils de compilation Xcode, CMake, Git, Asio standalone et OpenSSL,
-puis (renseigner `OPENSSL_ROOT_DIR` si nécessaire) :
-
-```sh
-./build.sh
-./build/BlendNet.app/Contents/MacOS/BlendNet
-```
-
 ### Mode sans interface
 
 Cette configuration ne recherche ni OpenGL ni GLFW et ne compile pas ImGui :
@@ -459,7 +451,6 @@ Emplacements par défaut :
 | --- | --- |
 | Linux | `$XDG_CONFIG_HOME/blendnet/settings.json` ou `~/.config/blendnet/settings.json` |
 | Windows | `%APPDATA%/BlendNet/settings.json` |
-| macOS | `~/Library/Application Support/BlendNet/settings.json` |
 
 Sans répertoire utilisateur disponible, le repli est `.blendnet/settings.json`.
 Le [fichier d'exemple](docs/settings.example.json) présente les paramètres persistants.

@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2022, macos-15-intel, macos-15]
+        os: [ubuntu-24.04, windows-2022]
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
@@ -35,11 +35,6 @@ jobs:
             zlib1g-dev libcurl4-openssl-dev libglfw3-dev libgl1-mesa-dev \
             libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev xvfb xauth \
             rpm patchelf file desktop-file-utils
-      - name: macOS dependencies
-        if: runner.os == 'macOS'
-        run: |
-          brew install asio openssl@3 curl libzip glfw nlohmann-json googletest reproc
-          echo "CMAKE_PREFIX_PATH=$(brew --prefix curl):$(brew --prefix openssl@3):$(brew --prefix)" >> "$GITHUB_ENV"
       - name: Windows dependencies
         if: runner.os == 'Windows'
         shell: pwsh
@@ -52,8 +47,8 @@ jobs:
             "-DCMAKE_TOOLCHAIN_FILE=$PWD/.cache/vcpkg/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows -DBLENDNET_BUILD_GUI=ON
           if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
-      - name: Configure Unix
-        if: runner.os != 'Windows'
+      - name: Configure Ubuntu
+        if: runner.os == 'Linux'
         run: cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DBLENDNET_BUILD_GUI=ON
       - name: Build
         run: cmake --build build --config Release --parallel 2
@@ -66,9 +61,6 @@ jobs:
         env:
           LIBGL_ALWAYS_SOFTWARE: 1
         run: xvfb-run -a python3 tests/integration/installed_package.py stage --gui
-      - name: Relocated macOS binaries
-        if: runner.os == 'macOS'
-        run: python3 tests/integration/installed_package.py stage
       - name: Relocated Windows binaries
         if: runner.os == 'Windows'
         run: python tests/integration/installed_package.py stage
@@ -84,17 +76,6 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "NSIS installation failed" }
           python tests/integration/installed_package.py $destination
           if ($LASTEXITCODE -ne 0) { throw "Installed EXE verification failed" }
-      - name: Install macOS DMG
-        if: runner.os == 'macOS'
-        run: |
-          mkdir -p .cache/installed-dmg
-          for image in build/packages/*.dmg; do
-            hdiutil attach "$image" -nobrowse -mountpoint "$RUNNER_TEMP/blendnet-dmg"
-            ditto "$RUNNER_TEMP/blendnet-dmg/BlendNet.app" .cache/installed-dmg/BlendNet.app
-            hdiutil detach "$RUNNER_TEMP/blendnet-dmg"
-          done
-          codesign --verify --deep --strict .cache/installed-dmg/BlendNet.app
-          python3 tests/integration/installed_package.py .cache/installed-dmg
       - name: Linux RPM and AppImage
         if: runner.os == 'Linux'
         run: |

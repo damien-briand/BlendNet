@@ -4,6 +4,9 @@ P9 ajoute les paquets CPack, leurs ressources et tests de démarrage, le fuzzing
 protocole et la CI GitHub Actions. Les exigences concernées sont RNF-01, RNF-07,
 RNF-08 et RNF-09, ainsi que les contrôles de reprise/quota RNF-04 et RF-24.
 
+Le périmètre actif est **Ubuntu et Windows**. Les builds, paquets et validations
+macOS sont mis en pause ; la CI ne les exécute plus.
+
 ## Installer et démarrer
 
 Les paquets ne contiennent ni Blender, ni configuration utilisateur, ni token.
@@ -19,15 +22,12 @@ mise à jour de l'application.
 | Linux portable | `.tar.gz` | Extraire l'archive et lancer `usr/bin/blendnet` depuis le dossier extrait. Les bibliothèques système restent nécessaires. |
 | Windows | `.exe` NSIS | Lancer l'installateur ; installation par utilisateur et raccourci **BlendNet**. La configuration utilisateur n'est pas dans le dossier d'installation. |
 | Windows portable | `.zip` | Extraire l'ensemble du dossier et lancer `bin/blendnet.exe` en conservant les DLL et `share/`. |
-| macOS Intel/Apple Silicon | `.dmg` | Choisir le paquet de la bonne architecture et copier **BlendNet.app** dans Applications. |
 
 Les paquets Linux construits sur Ubuntu 24.04 nécessitent les versions de glibc et
 des bibliothèques indiquées par leurs dépendances ; une AppImage ne remplace pas le
 noyau, glibc ou le pilote graphique. OpenGL 3.3 reste nécessaire pour l'interface.
-Les paquets Windows ne sont pas signés Authenticode. Le bundle macOS reçoit une
-signature ad hoc après regroupement des bibliothèques ; ce n'est pas une signature
-Developer ID ni une notarisation Apple. Ces opérations de publication demandent
-les certificats du distributeur et ne sont pas exécutées par la CI.
+Les paquets Windows ne sont pas signés Authenticode. Cette signature de publication
+demande le certificat du distributeur et n'est pas exécutée par la CI.
 
 ## Générer les paquets avec CMake/CPack
 
@@ -40,8 +40,8 @@ cpack --config build/CPackConfig.cmake
 
 Les sorties sont dans `build/packages/`, avec un fichier `.sha256` par paquet.
 Le nom des archives portables précise le système et l'architecture. Les générateurs
-par défaut sont **TGZ + DEB** sous Linux, **NSIS + ZIP** sous Windows et
-**DragNDrop + TGZ** sous macOS. Aucune commande ne publie les paquets sur Internet.
+par défaut sont **TGZ + DEB** sous Linux et **NSIS + ZIP** sous Windows.
+Aucune commande ne publie les paquets sur Internet.
 
 Une installation locale, sans modifier le système :
 
@@ -91,7 +91,7 @@ les dépendances ELF et son plugin crée l'image ; le premier lancement du packa
 peut télécharger le runtime AppImage officiel et nécessite donc Internet. La création
 et le test utilisent l'extraction automatique, sans montage FUSE.
 
-### Windows et macOS
+### Windows
 
 Sous Windows, utiliser Visual Studio 2022, CMake et NSIS. Le manifeste `vcpkg.json`
 fixe les versions des dépendances via une baseline. Depuis PowerShell :
@@ -108,29 +108,9 @@ Les DLL non système et le runtime Visual C++ sont copiés avec les exécutables
 `BLENDNET_RUNTIME_SEARCH_DIRS` permet d'indiquer des dossiers de DLL supplémentaires
 si les dépendances ne viennent pas de vcpkg.
 
-Sous macOS, installer les dépendances décrites dans la CI, puis :
-
-```sh
-cmake -S . -B build-macos -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_PREFIX_PATH="$(brew --prefix curl);$(brew --prefix openssl@3);$(brew --prefix)"
-cmake --build build-macos --parallel 2
-cpack --config build-macos/CPackConfig.cmake
-```
-
-Les bibliothèques non système sont regroupées dans **BlendNet.app**, leurs chemins
-sont corrigés puis le bundle est signé ad hoc. Chaque architecture est construite
-sur un runner natif distinct. La cible de déploiement de l'application est macOS 12.0 ;
-la compatibilité réelle dépend aussi des versions des bibliothèques utilisées et
-reste à confirmer sur les machines cibles.
-
 CMake vérifie la compilation et l'édition des liens de `std::jthread`,
-`std::stop_token` et des attentes annulables. Avec Xcode 16.x, si ces fonctions
-nécessitent `-fexperimental-library`, l'option est ajoutée à la compilation C++
-et à l'édition des liens de l'application et des tests. Une bibliothèque standard
-qui les fournit directement conserve sa configuration normale. Si aucune des deux
-configurations ne fonctionne, CMake signale l'incompatibilité dès la configuration.
-Apple indique que ces fonctions sont sorties de cette option expérimentale dans
-[Xcode 26](https://developer.apple.com/documentation/xcode-release-notes/xcode-26-release-notes).
+`std::stop_token` et des attentes annulables. Une bibliothèque standard incompatible
+est signalée dès la configuration.
 
 ## Ressources distribuées
 
@@ -221,16 +201,15 @@ symboliques en destination sont refusés. Le dossier parent doit déjà exister.
 Le workflow [ci.yml](../.github/workflows/ci.yml) est déclenché sur push, pull request
 et lancement manuel. Il compile avec CMake, exécute CTest, installe le composant
 Runtime, génère les paquets et vérifie les installations. Les runners sont Ubuntu
-24.04, Windows 2022, macOS 15 Intel et macOS 15 Apple Silicon. Le job Linux dédié
+24.04 et Windows 2022. Le job Ubuntu dédié
 exécute également ASan/UBSan et 60 secondes de fuzzing. Les paquets et journaux sont
 conservés comme artefacts pendant 14 jours ; aucun déploiement ni publication de
 release n'est automatique.
 
 Les contrôles graphiques automatiques sont exécutés sous Linux avec Mesa/Xvfb.
-Les tests d'installation Windows/macOS lancent les points d'entrée réels avec
+Les tests d'installation Windows lancent les points d'entrée réels avec
 `--version` et `--help` ; cela ne valide pas leurs pilotes OpenGL ou GPU.
-Les tests contrôleur P8 et les fixtures Blender DMG non disponibles restent soumis
-aux exclusions de plateforme existantes.
+Les tests contrôleur P8 restent soumis aux exclusions de plateforme existantes.
 
 Validation locale Linux : **12/12 tests CTest réussis** en compilation complète
 CMake/Make, puis **12/12 en headless Clang ASan/UBSan** avec la suppression système
@@ -245,7 +224,7 @@ et de ressources. L'interface du DEB extrait et l'AppImage réelle ont démarré
 trois images, avec une configuration temporaire.
 
 Un workflow ajouté au dépôt ne prouve pas qu'il est vert sur GitHub : les résultats
-Windows/macOS, les installateurs correspondants, RPM et les GPU physiques restent
+Windows, son installateur, RPM et les GPU physiques restent
 à confirmer. Le critère de validation complète de P9 reste conditionné au résultat
 de ces exécutions ; l'état local ne les remplace pas.
 

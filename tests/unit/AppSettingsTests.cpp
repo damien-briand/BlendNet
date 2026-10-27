@@ -219,6 +219,10 @@ TEST(AppSettingsTest, FileSystemErrors) {
     EXPECT_EQ(settings.save(directory.path()), SettingsError::WriteFailed);
     EXPECT_EQ(AppSettings::load(obstruction / "settings.json", settings),
               SettingsError::ReadFailed);
+    EXPECT_EQ(AppSettings::load(obstruction / "nested" / "settings.json", settings),
+              SettingsError::ReadFailed);
+    EXPECT_EQ(AppSettings::load(directory.path() / "missing" / "nested" / "settings.json", settings),
+              SettingsError::NotFound);
     EXPECT_EQ(AppSettings::load(directory.path(), settings), SettingsError::ReadFailed);
     EXPECT_TRUE(settings == before);
     EXPECT_TRUE(readFile(obstruction) == "not a directory");

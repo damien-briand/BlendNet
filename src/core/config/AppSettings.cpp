@@ -156,7 +156,23 @@ SettingsError AppSettings::load(const std::filesystem::path& path, AppSettings& 
     // exists(path, error) efface aussi ENOTDIR en signalant simplement « absent ».
     // Garder l'erreur de status pour distinguer un parent fichier d'un chemin inexistant.
     const auto status = std::filesystem::status(path, error);
-    if (error == std::errc::no_such_file_or_directory) {
+    if (error == std::errc::no_such_file_or_directory ||
+        (!error && !std::filesystem::exists(status))) {
+        // Windows can report PATH_NOT_FOUND even when an ancestor is a file.
+        // Find the first existing parent before classifying the path as missing.
+        for (auto parent = path.parent_path(); !parent.empty();) {
+            std::error_code parentError;
+            const auto parentStatus = std::filesystem::status(parent, parentError);
+            if (parentError && parentError != std::errc::no_such_file_or_directory)
+                return SettingsError::ReadFailed;
+            if (std::filesystem::exists(parentStatus))
+                return std::filesystem::is_directory(parentStatus) ? SettingsError::NotFound
+                                                                  : SettingsError::ReadFailed;
+            const auto next = parent.parent_path();
+            if (next == parent)
+                break;
+            parent = next;
+        }
         return SettingsError::NotFound;
     }
     if (error) {

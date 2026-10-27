@@ -3,6 +3,7 @@
 import contextlib
 import io
 import json
+import os
 import pathlib
 import re
 import sys
@@ -10,7 +11,7 @@ import types
 import unittest
 
 
-source = pathlib.Path(sys.argv.pop(1)).read_text()
+source = pathlib.Path(sys.argv.pop(1)).read_text(encoding="utf-8")
 inspection = re.search(r'constexpr auto inspection = R"PY\((.*?)\)PY";', source, re.S).group(1)
 
 
@@ -61,17 +62,18 @@ def inspect(paths, paints, linked=(), modifiers=()):
 
 class ProjectDependenciesTest(unittest.TestCase):
     # A stale Snap revision can be absent locally. Do not require its existence.
-    brush = "/home/test/snap/blender/7803/5.2/datafiles/assets/brushes/essentials_brushes-gp_draw.blend"
+    brush = os.path.abspath(
+        "/home/test/snap/blender/7803/5.2/datafiles/assets/brushes/essentials_brushes-gp_draw.blend")
 
     def test_essentials_weak_reference_is_not_a_render_dependency(self):
-        texture = "/project/textures/color.png"
+        texture = os.path.abspath("/project/textures/color.png")
         self.assertEqual(inspect([self.brush, texture, self.brush], [Paint()]), [texture])
 
     def test_genuinely_linked_library_is_preserved_even_with_same_weak_reference(self):
         self.assertEqual(inspect([self.brush], [Paint()], linked=[self.brush]), [self.brush])
 
     def test_custom_brush_and_other_assets_are_preserved(self):
-        other = "/project/datafiles/assets/brushes/custom.blend"
+        other = os.path.abspath("/project/datafiles/assets/brushes/custom.blend")
         self.assertEqual(inspect([self.brush, other], [Paint("CUSTOM")]),
                          sorted([self.brush, other]))
         self.assertEqual(inspect([other], [Paint()]), [other])
@@ -85,11 +87,13 @@ class ProjectDependenciesTest(unittest.TestCase):
         self.assertEqual(inspect([self.brush], [paint]), [self.brush])
 
     def test_simulation_caches_are_not_hidden_by_brush_filter(self):
+        fluid = os.path.abspath("/project/fluid")
+        particles = os.path.abspath("/project/particles")
         modifier = types.SimpleNamespace(
-            domain_settings=types.SimpleNamespace(cache_directory="/project/fluid"),
-            point_cache=types.SimpleNamespace(use_disk_cache=True, filepath="/project/particles"))
+            domain_settings=types.SimpleNamespace(cache_directory=fluid),
+            point_cache=types.SimpleNamespace(use_disk_cache=True, filepath=particles))
         self.assertEqual(inspect([self.brush], [Paint()], modifiers=[modifier]),
-                         ["/project/fluid", "/project/particles"])
+                         [fluid, particles])
 
 
 if __name__ == "__main__":

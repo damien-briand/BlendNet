@@ -57,7 +57,8 @@ LogError Logger::openFile(const std::filesystem::path& path) {
             return LogError::OpenFailed;
         }
     }
-    std::ofstream file(path, std::ios::app);
+    // Keep the serialized LF entries identical on disk and in memory on Windows too.
+    std::ofstream file(path, std::ios::app | std::ios::binary);
     if (!file) {
         return LogError::OpenFailed;
     }

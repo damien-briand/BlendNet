@@ -25,6 +25,8 @@ Développer une application de bureau multiplateforme (Linux, Windows, macOS) qu
 
 ### 1.3 Périmètre retenu
 
+Le développement, la CI et les livrables actifs ciblent **Ubuntu et Windows**.
+Le support macOS est mis en pause.
 
 | Décision              | Choix                                                                                                             |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -33,7 +35,7 @@ Développer une application de bureau multiplateforme (Linux, Windows, macOS) qu
 | Modèle économique     | **Open source** (GPL v3+)                                                                                         |
 | Langage               | **C++** (C++20 recommandé)                                                                                        |
 | Interface graphique   | **Dear ImGui** + GLFW + OpenGL 3.3                                                                                |
-| Plateformes           | **Linux, Windows, macOS**                                                                                         |
+| Plateformes           | **Linux (Ubuntu), Windows**                                                                                       |
 | Périmètre du document | Cahier des charges **complet**, sans priorisation MVP                                                             |
 
 
@@ -186,7 +188,7 @@ Les exigences sont numérotées pour pouvoir s'y référer pendant le développe
 | Détection GPU  | NVML (NVIDIA), bibliothèques AMD/Intel + benchmark Blender optionnel au premier lancement | Informations GPU du client                             |
 | Téléchargement | **libcurl** (uniquement pour blender.org)                                                 | Téléchargement automatique de Blender                  |
 | Process        | **reproc** (sous-processus multiplateforme)                                               | Lancement de Blender headless                          |
-| Tests          | Catch2 / GoogleTest + CI (GitHub Actions : Linux, Windows, macOS)                         | Qualité multiplateforme                                |
+| Tests          | Catch2 / GoogleTest + CI (GitHub Actions : Ubuntu, Windows)                               | Qualité multiplateforme                                |
 | Fenêtrage      | **GLFW** (fenêtres, entrées clavier/souris)                                               | Backend standard de Dear ImGui                         |
 | Configuration  | Fichier **JSON** (`settings.json` via nlohmann/json)                                      | Préférences, sources connues, token                    |
 | Threads        | `std::jthread` + **files de messages thread-safe**                                        | Communication réseau/rendus → UI                       |
@@ -236,14 +238,14 @@ Règles :
 
 | ID     | Exigence                                                                                                                                                                              |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| RNF-01 | **Portabilité** : builds et tests sur Linux, Windows 10+, macOS 12+ (x86\_64 + Apple Silicon).                                                                                        |
+| RNF-01 | **Portabilité** : builds et tests sur Linux (Ubuntu) et Windows 10+. Le support macOS est en pause.                                                                                  |
 | RNF-02 | **Performance** : le protocole ne doit pas être le goulot — un job de 10 Go doit saturer la bande passante disponible ; compression zstd optionnelle.                                 |
 | RNF-03 | **Fiabilité** : aucune frame n'est perdue — tout échec de client entraîne une redistribution ; le job ne se termine qu'avec 100 % des frames valides (ou liste explicite des échecs). |
 | RNF-04 | **Reprise** : reprise des transferts interrompus (fichiers et job) après coupure réseau ou redémarrage de l'application.                                                              |
 | RNF-05 | **Réactivité UI** : les transferts et rendus s'exécutent dans des threads séparés ; l'interface ne gèle jamais.                                                                       |
 | RNF-06 | **UX** : configuration minimale pour un client non technique (IP:PORT + token, accepter popup, c'est tout).                                                                           |
 | RNF-07 | **Journalisation** : logs horodatés des deux côtés, niveau réglable, exportables pour le support.                                                                                     |
-| RNF-08 | **Installation** : packages natifs (`.deb`/`.rpm`, `.exe`/MSIX, `.dmg`) et/ou version portable.                                                                                       |
+| RNF-08 | **Installation** : packages natifs (`.deb`/`.rpm`, `.exe`/MSIX) et/ou version portable.                                                                                                |
 | RNF-09 | **i18n** : interface en français et anglais dès la v1 (catalogues gettext ou tables de clés), extensible.                                                                             |
 
 
@@ -302,7 +304,7 @@ stateDiagram-v2
 ## 8. Livrables
 
 1. **Code source** du dépôt (C++/CMake) avec README, guide de build par plateforme.
-2. **Binaires packagés** : Linux (.deb + .rpm + AppImage), Windows (.exe), macOS (.dmg x86\_64 + Apple Silicon).
+2. **Binaires packagés** : Linux (.deb + .rpm + AppImage), Windows (.exe).
 3. **Spécification du protocole** en document dédié (détail binaire/octets de chaque message).
 4. **Documentation utilisateur** : guide source, guide client, guide appairage (IP:PORT + token).
 5. **Plan de tests** : tests unitaires (protocole, ZIP, distribution), tests d'intégration (serveur + N clients simulés), tests réseau dégradé (coupure en cours de transfert).
