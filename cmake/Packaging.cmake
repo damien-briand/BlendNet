@@ -46,7 +46,9 @@ if(WIN32)
     install(TARGETS ${_blendnet_windows_targets}
         RUNTIME_DEPENDENCIES
             DIRECTORIES ${_blendnet_dll_dirs} ${BLENDNET_RUNTIME_SEARCH_DIRS}
-            PRE_EXCLUDE_REGEXES "api-ms-.*" "ext-ms-.*"
+            # Optional Windows component: exclude before resolution, since it
+            # can be absent on the packaging host. CMake matches DLL names in lowercase.
+            PRE_EXCLUDE_REGEXES "api-ms-.*" "ext-ms-.*" [[^hvsifiletrust\.dll$]]
             POST_EXCLUDE_REGEXES ".*/[Ww][Ii][Nn][Dd][Oo][Ww][Ss]/.*"
         RUNTIME DESTINATION "${_blendnet_bin_dir}" COMPONENT Runtime
         LIBRARY DESTINATION "${_blendnet_library_dir}" COMPONENT Runtime)

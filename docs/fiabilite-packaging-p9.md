@@ -105,6 +105,8 @@ cpack --config build-windows/CPackConfig.cmake -C Release
 ```
 
 Les DLL non système et le runtime Visual C++ sont copiés avec les exécutables.
+La DLL système optionnelle `HvsiFileTrust.dll` est exclue avant la recherche des
+dépendances pour permettre l'installation même lorsqu'elle est absente du runner.
 `BLENDNET_RUNTIME_SEARCH_DIRS` permet d'indiquer des dossiers de DLL supplémentaires
 si les dépendances ne viennent pas de vcpkg.
 
