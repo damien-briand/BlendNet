@@ -71,8 +71,10 @@ jobs:
         shell: pwsh
         run: |
           $installer = (Get-ChildItem build/packages/*.exe | Select-Object -First 1).FullName
-          $destination = "$PWD/.cache/installed-exe"
-          $process = Start-Process -FilePath $installer -ArgumentList "/S", "/D=$destination" -Wait -PassThru
+          # NSIS strips forward slashes from /D paths. Keep /D last and unquoted,
+          # including when the absolute Windows path contains spaces.
+          $destination = [System.IO.Path]::GetFullPath((Join-Path $PWD.Path '.cache\installed-exe'))
+          $process = Start-Process -FilePath $installer -ArgumentList "/S /D=$destination" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "NSIS installation failed" }
           python tests/integration/installed_package.py $destination
           if ($LASTEXITCODE -ne 0) { throw "Installed EXE verification failed" }

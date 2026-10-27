@@ -18,7 +18,12 @@ def main():
     candidates = [(root / "bin", root / "share/blendnet"),
                   (root / "usr/bin", root / "usr/share/blendnet"),
                   (root / "BlendNet.app/Contents/MacOS", root / "BlendNet.app/Contents/Resources")]
-    binary, resources = next((b, r) for b, r in candidates if (b / ("blendnet-cli" + suffix)).is_file())
+    layout = next(((b, r) for b, r in candidates
+                   if (b / ("blendnet-cli" + suffix)).is_file()), None)
+    if layout is None:
+        checked = ", ".join(str(b / ("blendnet-cli" + suffix)) for b, _ in candidates)
+        parser.error(f"Installation incomplete under {root}: executable not found; checked {checked}")
+    binary, resources = layout
     assert (resources / "fonts/DejaVuSans.ttf").stat().st_size > 10000
     assert (resources / "licenses/LICENSE").is_file()
     assert (resources / "README.md").is_file()
