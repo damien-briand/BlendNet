@@ -89,7 +89,8 @@ struct JobExecutor::Impl {
         }
     }
     std::filesystem::path attempt(const protocol::TaskAssign& task) const {
-        return root / transfer::storageKey(task.jobId) / transfer::storageKey(task.chunkId);
+        // Keep one full digest for the pair, avoiding two long directory names on Windows.
+        return root / transfer::storageKey(task.jobId + std::string(1, '\0') + task.chunkId);
     }
     void publish(ExecutorState state, const protocol::TaskAssign& task, std::string detail = {}) {
         events.push({state, task.jobId, task.chunkId, std::move(detail), attempt(task)});

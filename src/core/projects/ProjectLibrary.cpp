@@ -15,6 +15,10 @@ namespace blendnet::projects {
 namespace {
 bool stopped(const std::atomic_bool* flag) { return flag && flag->load(); }
 std::string text(const std::filesystem::path& p) { return blender::utf8(p); }
+std::string archiveName(const std::filesystem::path& path) {
+    const auto value = path.generic_u8string();
+    return {value.begin(), value.end()};
+}
 constexpr auto inspection = R"PY(
 import bpy, json, os
 s=bpy.context.scene
@@ -238,7 +242,7 @@ blender::BlenderError ProjectLibrary::package(const blender::VerifiedBlender& bi
                 if (result.error != BlenderError::None)
                     return result.error;
             }
-            files.emplace_back(text(relative), input);
+            files.emplace_back(archiveName(relative), input);
         }
         auto* zip = zip_open(text(destination).c_str(), ZIP_CREATE | ZIP_EXCL, nullptr);
         if (!zip)
@@ -251,7 +255,7 @@ blender::BlenderError ProjectLibrary::package(const blender::VerifiedBlender& bi
             },
             nullptr, const_cast<std::atomic_bool*>(cancelled));
         const auto manifest =
-            nlohmann::json{{"schemaVersion", 1}, {"blendPath", text(p.entry.path.filename())}}
+            nlohmann::json{{"schemaVersion", 1}, {"blendPath", archiveName(p.entry.path.filename())}}
                 .dump();
         for (const auto& [name, path] : files) {
             if (name == "blendnet-project.json")

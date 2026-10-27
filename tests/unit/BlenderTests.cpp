@@ -139,19 +139,33 @@ struct ExecutorHarness {
                    })) >= count;
         });
     }
-    bool waitFiles(std::size_t count) {
+    ::testing::AssertionResult waitFiles(std::size_t count) {
         std::unique_lock lock(mutex);
-        return changed.wait_for(lock, 15s, [&] { return files.size() >= count; });
+        if (changed.wait_for(lock, 15s, [&] { return files.size() >= count; }))
+            return ::testing::AssertionSuccess();
+        return ::testing::AssertionFailure() << diagnostics();
     }
-    bool state(jobs::ExecutorState expected) {
+    ::testing::AssertionResult state(jobs::ExecutorState expected) {
         const auto end = std::chrono::steady_clock::now() + 10s;
+        std::ostringstream text;
         do {
-            for (const auto& event : executor->drainEvents())
+            for (const auto& event : executor->drainEvents()) {
                 if (event.state == expected)
-                    return true;
+                    return ::testing::AssertionSuccess();
+                text << jobs::toString(event.state) << ": " << event.detail << '\n';
+                if (event.state == jobs::ExecutorState::Failed)
+                    return ::testing::AssertionFailure() << text.str();
+            }
             std::this_thread::sleep_for(10ms);
         } while (std::chrono::steady_clock::now() < end);
-        return false;
+        return ::testing::AssertionFailure() << "Timed out waiting for "
+                                             << jobs::toString(expected) << '\n' << text.str();
+    }
+    std::string diagnostics() {
+        std::ostringstream text;
+        for (const auto& event : executor->drainEvents())
+            text << jobs::toString(event.state) << ": " << event.detail << '\n';
+        return text.str();
     }
     void transfer(const transfer::FileRequest& file, transfer::Direction direction) {
         network::NetworkEvent event{network::EventKind::TransferProgress};
@@ -183,6 +197,9 @@ struct ExecutorHarness {
 TEST_F(BlenderTest, ExecutorPackagesActualChildOutputAndCleansOnlyAfterFinalAck) {
     jobs::ExecutorOptions options;
     options.directory = directory.path() / "executor";
+    // Exercise a normal Windows user directory depth without requiring long-path support.
+    if (options.directory.native().size() < 90)
+        options.directory /= std::string(90 - options.directory.native().size(), 'w');
     options.blenderCache = cache;
     ExecutorHarness harness(options, download);
     harness.offer(directory.path() / "project.zip");
@@ -195,6 +212,7 @@ TEST_F(BlenderTest, ExecutorPackagesActualChildOutputAndCleansOnlyAfterFinalAck)
         result = harness.files.front();
     }
     ASSERT_TRUE(std::filesystem::exists(result.path));
+    EXPECT_LT(result.path.native().size(), 260u);
     EXPECT_EQ(result.fileId, jobs::resultFileId(task.chunkId));
     EXPECT_EQ(
         jobs::ResultAssembler::validate(task, result.path, directory.path() / "validated").size(),
@@ -351,6 +369,12 @@ TEST_F(BlenderTest, ProjectMetadataAndPortableArchivePreserveOnlySelectedDepende
     const auto zip = directory.path() / "export/project.zip";
     ASSERT_EQ(projects::ProjectLibrary::package(*binary.value, *info.value, zip),
               BlenderError::None);
+    auto* packaged = zip_open(zip.string().c_str(), ZIP_RDONLY, nullptr);
+    ASSERT_NE(packaged, nullptr);
+    EXPECT_EQ(zip_get_num_entries(packaged, 0), 3);
+    EXPECT_GE(zip_name_locate(packaged, "textures/image.bin", 0), 0);
+    EXPECT_LT(zip_name_locate(packaged, "textures\\image.bin", 0), 0);
+    zip_discard(packaged);
     const auto output = directory.path() / "unpacked";
     ASSERT_TRUE(archive::ZipService::extractProject(zip, output));
     EXPECT_EQ(test::readFile(output / "textures/image.bin"), "texture");
