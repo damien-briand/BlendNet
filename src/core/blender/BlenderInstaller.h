@@ -7,6 +7,11 @@ namespace blendnet::blender {
 using Download = std::function<BlenderError(const std::string&, const std::filesystem::path&,
                                             std::uint64_t, const std::atomic_bool*)>;
 using BlenderLog = std::function<void(std::string_view)>;
+namespace detail {
+BlenderError extractBlenderZip(const Release& release, const std::filesystem::path& archive,
+                               const std::filesystem::path& destination,
+                               const std::atomic_bool* cancelled, std::string& diagnostic);
+}
 BlenderError downloadOfficial(const std::string& url, const std::filesystem::path& target,
                               std::uint64_t limit, const std::atomic_bool* cancelled);
 BlenderError downloadOfficialDiagnosed(const std::string& url, const std::filesystem::path& target,

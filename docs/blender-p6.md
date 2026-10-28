@@ -66,6 +66,12 @@ retrouver les DLL du runtime Visual C++ distribuées avec l'application, et déf
 `TEMP` et `TMP` dans le dossier temporaire isolé. La validation HTTPS utilise le
 magasin de certificats natif lorsque le backend curl le permet.
 
+Le cache Windows utilise les noms Win32 étendus (`\\?\`), y compris pour
+l'extraction, le contrôle d'intégrité et le nettoyage. Les fichiers Blender dont
+le chemin dépasse 260 caractères restent accessibles sans modification de la
+stratégie système des chemins longs. Un échec d'écriture ou de création indique
+le chemin concerné et l'erreur système ; il est distinct d'une archive invalide.
+
 Le niveau `debug` est réglable dans **Paramètres → Général** et prend effet à
 l'enregistrement. Les étapes de préparation sont incluses dans le journal exporté.
 Les erreurs conservent le diagnostic curl/HTTP, le chemin du programme, son code

@@ -256,6 +256,7 @@ if(BUILD_TESTING)
         tests/unit/TransferTests.cpp
         tests/unit/JobTests.cpp
         tests/unit/BlenderTests.cpp
+        tests/unit/BlenderArchiveTests.cpp
         tests/unit/ReleaseCatalogTests.cpp
         tests/unit/ZipServiceTests.cpp
         tests/unit/DesktopPolicyTests.cpp

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -66,7 +67,7 @@ BlenderResult<std::string> treeHash(const std::filesystem::path& directory,
     try {
         if (std::filesystem::is_symlink(directory) || !std::filesystem::is_directory(directory))
             return {{}, BlenderError::CacheCorrupt};
-        const auto root = std::filesystem::canonical(directory);
+        const auto root = extendedFilePath(std::filesystem::canonical(directory));
         std::vector<std::filesystem::path> paths;
         for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
             if (stopped(cancelled))
@@ -88,7 +89,7 @@ BlenderResult<std::string> treeHash(const std::filesystem::path& directory,
             const auto name = utf8(path.lexically_relative(root));
             std::string item;
             if (std::filesystem::is_symlink(status)) {
-                if (!inside(root, std::filesystem::canonical(path)))
+                if (!inside(root, extendedFilePath(std::filesystem::canonical(path))))
                     return {{}, BlenderError::CacheCorrupt};
                 item = "L" + name + "\n" + utf8(std::filesystem::read_symlink(path));
             } else if (std::filesystem::is_directory(status))
@@ -139,78 +140,119 @@ void seal(const std::filesystem::path& root) {
                                      std::filesystem::perms::others_write,
                                  std::filesystem::perm_options::remove);
 }
-BlenderError extractZip(const Release& release, const std::filesystem::path& archive,
-                        const std::filesystem::path& destination,
-                        const std::atomic_bool* cancelled) {
-    std::unique_ptr<zip_t, decltype(&zip_discard)> zip(
-        zip_open(utf8(archive).c_str(), ZIP_RDONLY | ZIP_CHECKCONS, nullptr), zip_discard);
-    if (!zip)
-        return BlenderError::ArchiveRejected;
-    const auto count = zip_get_num_entries(zip.get(), 0);
-    if (count < 1 || count > 100000)
-        return BlenderError::ArchiveRejected;
-    std::uint64_t total = 0;
-    std::set<std::string> names;
-    for (zip_int64_t i = 0; i < count; ++i) {
-        zip_stat_t stat{};
-        zip_uint8_t os = 0;
-        zip_uint32_t attrs = 0;
-        if (zip_stat_index(zip.get(), i, 0, &stat) < 0 || !stat.name || !safeName(stat.name) ||
-            !std::string_view(stat.name).starts_with(release.topDirectory + "/") ||
-            !names.insert(stat.name).second || stat.encryption_method != ZIP_EM_NONE ||
-            zip_file_get_external_attributes(zip.get(), i, 0, &os, &attrs) < 0 ||
-            (os == ZIP_OPSYS_UNIX && ((attrs >> 16) & 0170000) != 0 &&
-             ((attrs >> 16) & 0170000) != 0100000 && ((attrs >> 16) & 0170000) != 0040000) ||
-            stat.size > 8ULL * 1024 * 1024 * 1024 - total)
-            return BlenderError::ArchiveRejected;
-        total += stat.size;
-    }
-    if (std::filesystem::space(destination).available < total)
-        return BlenderError::IoError;
-    for (zip_int64_t i = 0; i < count; ++i) {
-        if (stopped(cancelled))
-            return BlenderError::Cancelled;
-        zip_stat_t stat{};
-        if (zip_stat_index(zip.get(), i, 0, &stat) < 0)
-            return BlenderError::ArchiveRejected;
-        const auto target = destination / pathFromUtf8(stat.name);
-        if (std::string_view(stat.name).ends_with('/')) {
-            std::filesystem::create_directories(target);
-            continue;
+} // namespace
+namespace detail {
+BlenderError extractBlenderZip(const Release& release, const std::filesystem::path& archive,
+                               const std::filesystem::path& destination,
+                               const std::atomic_bool* cancelled, std::string& diagnostic) {
+    diagnostic.clear();
+    const auto reject = [&](BlenderError error, std::string reason) {
+        diagnostic = std::move(reason);
+        return error;
+    };
+    try {
+        int openError = 0;
+        std::unique_ptr<zip_t, decltype(&zip_discard)> zip(
+            zip_open(utf8(extendedFilePath(archive)).c_str(), ZIP_RDONLY | ZIP_CHECKCONS,
+                     &openError), zip_discard);
+        if (!zip) {
+            zip_error_t error;
+            zip_error_init_with_code(&error, openError);
+            const std::string message = zip_error_strerror(&error);
+            zip_error_fini(&error);
+            return reject(BlenderError::ArchiveRejected,
+                          "Cannot open ZIP " + utf8(archive) + ": " + message);
         }
-        std::filesystem::create_directories(target.parent_path());
-        std::unique_ptr<zip_file_t, decltype(&zip_fclose)> file(zip_fopen_index(zip.get(), i, 0),
-                                                                zip_fclose);
-        std::ofstream output(target, std::ios::binary);
-        if (!file || !output)
-            return BlenderError::ArchiveRejected;
-        std::array<char, 65536> buffer{};
-        std::uint64_t written = 0;
-        while (true) {
+        const auto count = zip_get_num_entries(zip.get(), 0);
+        if (count < 1 || count > 100000)
+            return reject(BlenderError::ArchiveRejected,
+                          "Invalid ZIP entry count: " + std::to_string(count));
+        std::uint64_t total = 0;
+        std::set<std::string> names;
+        for (zip_int64_t i = 0; i < count; ++i) {
+            zip_stat_t stat{};
+            zip_uint8_t os = 0;
+            zip_uint32_t attrs = 0;
+            if (zip_stat_index(zip.get(), i, 0, &stat) < 0 || !stat.name || !safeName(stat.name) ||
+                !std::string_view(stat.name).starts_with(release.topDirectory + "/") ||
+                !names.insert(stat.name).second || stat.encryption_method != ZIP_EM_NONE ||
+                zip_file_get_external_attributes(zip.get(), i, 0, &os, &attrs) < 0 ||
+                (os == ZIP_OPSYS_UNIX && ((attrs >> 16) & 0170000) != 0 &&
+                 ((attrs >> 16) & 0170000) != 0100000 && ((attrs >> 16) & 0170000) != 0040000) ||
+                stat.size > 8ULL * 1024 * 1024 * 1024 - total)
+                return reject(BlenderError::ArchiveRejected,
+                              "Invalid ZIP entry: " + std::string(stat.name ? stat.name : "<unknown>") +
+                                  "; " + zip_strerror(zip.get()));
+            total += stat.size;
+        }
+        const auto root = extendedFilePath(destination);
+        if (std::filesystem::space(root).available < total)
+            return reject(BlenderError::IoError,
+                          "Not enough space to extract Blender into " + utf8(root));
+        for (zip_int64_t i = 0; i < count; ++i) {
             if (stopped(cancelled))
                 return BlenderError::Cancelled;
-            const auto bytes = zip_fread(file.get(), buffer.data(), buffer.size());
-            if (bytes < 0)
-                return BlenderError::ArchiveRejected;
-            if (!bytes)
-                break;
-            written += bytes;
-            if (written > stat.size)
-                return BlenderError::ArchiveRejected;
-            output.write(buffer.data(), bytes);
+            zip_stat_t stat{};
+            if (zip_stat_index(zip.get(), i, 0, &stat) < 0)
+                return reject(BlenderError::ArchiveRejected, zip_strerror(zip.get()));
+            const auto target = (root / pathFromUtf8(stat.name)).make_preferred();
+            if (std::string_view(stat.name).ends_with('/')) {
+                std::filesystem::create_directories(target);
+                continue;
+            }
+            std::filesystem::create_directories(target.parent_path());
+            std::unique_ptr<zip_file_t, decltype(&zip_fclose)> file(zip_fopen_index(zip.get(), i, 0),
+                                                                  zip_fclose);
+            if (!file)
+                return reject(BlenderError::ArchiveRejected,
+                              "Cannot read ZIP entry " + std::string(stat.name) + ": " +
+                                  zip_strerror(zip.get()));
+            std::ofstream output(target, std::ios::binary);
+            if (!output) {
+                const std::error_code error(errno, std::generic_category());
+                return reject(BlenderError::IoError,
+                              "Cannot create extracted file " + utf8(target) + ": " + error.message());
+            }
+            std::array<char, 65536> buffer{};
+            std::uint64_t written = 0;
+            while (true) {
+                if (stopped(cancelled))
+                    return BlenderError::Cancelled;
+                const auto bytes = zip_fread(file.get(), buffer.data(), buffer.size());
+                if (bytes < 0)
+                    return reject(BlenderError::ArchiveRejected,
+                                  "Cannot decode ZIP entry " + std::string(stat.name) + ": " +
+                                      zip_file_strerror(file.get()));
+                if (!bytes)
+                    break;
+                written += bytes;
+                if (written > stat.size)
+                    return reject(BlenderError::ArchiveRejected,
+                                  "ZIP size mismatch: " + std::string(stat.name));
+                output.write(buffer.data(), bytes);
+                if (!output)
+                    return reject(BlenderError::IoError,
+                                  "Cannot write extracted file " + utf8(target));
+            }
+            output.close();
             if (!output)
-                return BlenderError::IoError;
+                return reject(BlenderError::IoError, "Cannot close extracted file " + utf8(target));
+            if (written != stat.size)
+                return reject(BlenderError::ArchiveRejected,
+                              "ZIP size mismatch: " + std::string(stat.name));
         }
-        output.close();
-        if (!output || written != stat.size)
-            return BlenderError::ArchiveRejected;
+        return BlenderError::None;
+    } catch (const std::filesystem::filesystem_error& error) {
+        return reject(BlenderError::IoError, "Extracting Blender ZIP: " + std::string(error.what()));
     }
-    return BlenderError::None;
 }
+} // namespace detail
+namespace {
 BlenderError extract(const Release& release, const std::filesystem::path& archive,
-                     const std::filesystem::path& destination, const std::atomic_bool* cancelled) {
+                     const std::filesystem::path& destination, const std::atomic_bool* cancelled,
+                     std::string& diagnostic) {
     if (release.archiveName.ends_with(".zip"))
-        return extractZip(release, archive, destination, cancelled);
+        return detail::extractBlenderZip(release, archive, destination, cancelled, diagnostic);
     if (release.archiveName.ends_with(".tar.xz")) {
         // L'archive a déjà été authentifiée par le SHA-256 publié sur blender.org.
         const auto listing =
@@ -319,6 +361,7 @@ BlenderResult<VerifiedBlender> BlenderInstaller::ensureVersion(std::string_view 
             m_log(stage);
     };
     try {
+        m_cache = extendedFilePath(m_cache);
         report("Preparing Blender " + std::string(version) + "; cache=" + utf8(m_cache));
         if (!m_localExecutable.empty()) {
             const auto executable = std::filesystem::absolute(m_localExecutable).lexically_normal();
@@ -348,7 +391,7 @@ BlenderResult<VerifiedBlender> BlenderInstaller::ensureVersion(std::string_view 
             report("Selected Blender is " + installed + "; using managed version " + std::string(version));
         }
         privateDirectory(m_cache);
-        m_cache = std::filesystem::canonical(m_cache);
+        m_cache = extendedFilePath(std::filesystem::canonical(m_cache));
         const auto entry = m_cache / release.value->key;
         if (std::filesystem::is_symlink(entry))
             return {{}, BlenderError::CacheCorrupt};
@@ -434,9 +477,10 @@ BlenderResult<VerifiedBlender> BlenderInstaller::ensureVersion(std::string_view 
         const auto content = stage / "content";
         privateDirectory(content);
         report("Extracting Blender into " + utf8(content));
-        error = extract(*release.value, archive, content, cancelled);
+        std::string extractionDiagnostic;
+        error = extract(*release.value, archive, content, cancelled, extractionDiagnostic);
         if (error != BlenderError::None)
-            return {{}, error};
+            return {{}, error, extractionDiagnostic};
         if (!std::filesystem::is_regular_file(content / release.value->executable))
             return {{}, BlenderError::ArchiveRejected};
         report("Verifying extracted Blender files");
