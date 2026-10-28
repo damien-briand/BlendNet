@@ -36,7 +36,7 @@ BlenderResult<std::vector<std::string>> availableReleases(Platform platform,
             return {{}, BlenderError::Cancelled};
         auto root = fetch(std::string(releaseRepository), cancelled);
         if (!root)
-            return {{}, root.error};
+            return {{}, root.error, root.diagnostic};
         if (root.value->size() > 1024 * 1024)
             return {{}, BlenderError::DownloadFailed};
         static const std::regex directory(R"(^Blender([0-9]{1,2})\.([0-9]{1,3})/$)");
@@ -61,7 +61,7 @@ BlenderResult<std::vector<std::string>> availableReleases(Platform platform,
                               std::to_string(major) + "." + std::to_string(minor) + "/";
             auto listing = fetch(base, cancelled);
             if (!listing)
-                return {{}, listing.error};
+                return {{}, listing.error, listing.diagnostic};
             if (listing.value->size() > 1024 * 1024)
                 return {{}, BlenderError::DownloadFailed};
             const auto files = links(*listing.value);

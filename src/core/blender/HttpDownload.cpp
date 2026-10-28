@@ -43,6 +43,13 @@ int progress(void* data, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
 } // namespace
 BlenderError downloadOfficial(const std::string& url, const std::filesystem::path& target,
                               std::uint64_t limit, const std::atomic_bool* cancelled) {
+    std::string diagnostic;
+    return downloadOfficialDiagnosed(url, target, limit, cancelled, diagnostic);
+}
+BlenderError downloadOfficialDiagnosed(const std::string& url, const std::filesystem::path& target,
+                                       std::uint64_t limit, const std::atomic_bool* cancelled,
+                                       std::string& diagnostic) {
+    diagnostic = url + " -> " + utf8(target);
     if (!officialDownloadUrl(url) || !limit)
         return BlenderError::InvalidRequest;
     if (cancelled && cancelled->load())
@@ -53,8 +60,10 @@ BlenderError downloadOfficial(const std::string& url, const std::filesystem::pat
     try {
         Output output{std::ofstream(target, std::ios::binary | std::ios::trunc), limit, 0,
                       cancelled};
-        if (!output.file)
+        if (!output.file) {
+            diagnostic += ": cannot open destination file";
             return BlenderError::IoError;
+        }
         std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl(curl_easy_init(),
                                                                  curl_easy_cleanup);
         if (!curl)
@@ -64,6 +73,11 @@ BlenderError downloadOfficial(const std::string& url, const std::filesystem::pat
         curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 0L);
         curl_easy_setopt(curl.get(), CURLOPT_SSL_VERIFYPEER, 1L);
         curl_easy_setopt(curl.get(), CURLOPT_SSL_VERIFYHOST, 2L);
+#ifdef _WIN32
+        curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, static_cast<long>(CURLSSLOPT_NATIVE_CA));
+#endif
+        char errorBuffer[CURL_ERROR_SIZE]{};
+        curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, errorBuffer);
         curl_easy_setopt(curl.get(), CURLOPT_FAILONERROR, 1L);
         curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, 30000L);
         curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT_MS, 600000L);
@@ -82,10 +96,16 @@ BlenderError downloadOfficial(const std::string& url, const std::filesystem::pat
         output.file.close();
         if (cancelled && cancelled->load())
             return BlenderError::Cancelled;
-        if (status != CURLE_OK || response != 200 || !output.file || !output.bytes)
+        if (status != CURLE_OK || response != 200 || !output.file || !output.bytes) {
+            diagnostic += ": curl=" + std::to_string(int(status)) + " (" +
+                          (errorBuffer[0] ? errorBuffer : curl_easy_strerror(status)) +
+                          "), HTTP=" + std::to_string(response) +
+                          ", bytes=" + std::to_string(output.bytes);
             return BlenderError::DownloadFailed;
+        }
         return BlenderError::None;
-    } catch (const std::exception&) {
+    } catch (const std::exception& error) {
+        diagnostic += ": " + std::string(error.what());
         return BlenderError::IoError;
     }
 }
@@ -108,6 +128,11 @@ BlenderResult<std::string> fetchOfficialListing(const std::string& url,
         curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 0L);
         curl_easy_setopt(curl.get(), CURLOPT_SSL_VERIFYPEER, 1L);
         curl_easy_setopt(curl.get(), CURLOPT_SSL_VERIFYHOST, 2L);
+#ifdef _WIN32
+        curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, static_cast<long>(CURLSSLOPT_NATIVE_CA));
+#endif
+        char errorBuffer[CURL_ERROR_SIZE]{};
+        curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, errorBuffer);
         curl_easy_setopt(curl.get(), CURLOPT_FAILONERROR, 1L);
         curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, 5000L);
         curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT_MS, 10000L);
@@ -139,7 +164,9 @@ BlenderResult<std::string> fetchOfficialListing(const std::string& url,
         if (cancelled && cancelled->load())
             return {{}, BlenderError::Cancelled};
         if (status != CURLE_OK || response != 200 || body.empty())
-            return {{}, BlenderError::DownloadFailed};
+            return {{}, BlenderError::DownloadFailed,
+                    url + ": " + (errorBuffer[0] ? errorBuffer : curl_easy_strerror(status)) +
+                        "; HTTP=" + std::to_string(response)};
         return {std::move(body), BlenderError::None};
     } catch (const std::exception&) {
         return {{}, BlenderError::DownloadFailed};

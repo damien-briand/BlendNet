@@ -27,8 +27,23 @@ using Json = nlohmann::json;
 std::recursive_mutex settingsFileMutex;
 
 std::filesystem::path environmentPath(const char* name) {
+#ifdef _WIN32
+    std::wstring wideName;
+    for (const auto* c = name; *c; ++c)
+        wideName.push_back(wchar_t(*c));
+    const auto size = GetEnvironmentVariableW(wideName.c_str(), nullptr, 0);
+    if (!size)
+        return {};
+    std::wstring value(size, L'\0');
+    const auto written = GetEnvironmentVariableW(wideName.c_str(), value.data(), size);
+    if (!written || written >= size)
+        return {};
+    value.resize(written);
+    return std::filesystem::path(value);
+#else
     const auto* value = std::getenv(name);
     return value && *value ? pathFromUtf8(value) : std::filesystem::path{};
+#endif
 }
 
 std::string pathUtf8(const std::filesystem::path& path) {
@@ -119,6 +134,7 @@ SettingsError AppSettings::validate() const {
         logLevel > LogLevel::Off ||
         std::find(backends.begin(), backends.end(), computeBackend) == backends.end() ||
         !isUsablePath(workDirectory) || !isUsablePath(blenderCacheDirectory) ||
+        (!blenderExecutable.empty() && !isUsablePath(blenderExecutable)) ||
         (benchmarkScore && *benchmarkScore < 0) ||
         std::find(availabilityValues.begin(), availabilityValues.end(), availability) ==
             availabilityValues.end() ||
@@ -250,6 +266,7 @@ SettingsError AppSettings::load(const std::filesystem::path& path, AppSettings& 
             pathFromUtf8(data.value("workDirectory", pathUtf8(settings.workDirectory)));
         settings.blenderCacheDirectory = pathFromUtf8(
             data.value("blenderCacheDirectory", pathUtf8(settings.blenderCacheDirectory)));
+        settings.blenderExecutable = pathFromUtf8(data.value("blenderExecutable", std::string{}));
         if (data.contains("benchmarkScore") && !data.at("benchmarkScore").is_null()) {
             settings.benchmarkScore =
                 integer(data.at("benchmarkScore"), 0, std::numeric_limits<int>::max());
@@ -310,6 +327,7 @@ SettingsError AppSettings::save(const std::filesystem::path& path) const {
                   {"keepCompletedJobs", keepCompletedJobs},
                   {"workDirectory", pathUtf8(workDirectory)},
                   {"blenderCacheDirectory", pathUtf8(blenderCacheDirectory)},
+                  {"blenderExecutable", pathUtf8(blenderExecutable)},
                   {"benchmarkScore", benchmarkScore ? Json(*benchmarkScore) : Json(nullptr)},
                   {"knownSources", std::move(sources)}};
         data.update({{"blenderVersion", blenderVersion},

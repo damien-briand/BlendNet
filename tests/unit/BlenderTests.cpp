@@ -654,6 +654,75 @@ TEST_F(BlenderTest, BenchmarkPersistsScoreWithoutLosingOtherSettings) {
     EXPECT_EQ(after.workDirectory, before.workDirectory);
     EXPECT_EQ(after.computeBackend, "CPU");
 }
+TEST_F(BlenderTest, ExplicitLocalBlenderRunsProbeAndBenchmarkWithoutDownloadingOrWritingItsInstallation) {
+    const auto installed = directory.path() / std::filesystem::path(u8"Installed Blender é") / "blender.exe";
+    std::filesystem::create_directories(installed.parent_path());
+    std::filesystem::copy_file(BLENDNET_FAKE_BLENDER_PATH, installed);
+    test::writeFile(installed.parent_path() / "keep.txt", "untouched");
+    std::filesystem::permissions(installed.parent_path(), std::filesystem::perms::owner_read |
+                                                          std::filesystem::perms::owner_exec);
+    const auto binary = BlenderInstaller(cache, download, installed).ensureVersion("4.2.1");
+    ASSERT_TRUE(binary) << binary.diagnostic;
+    EXPECT_EQ(binary.value->executable(), installed);
+    EXPECT_TRUE(GpuInfoService::probe(*binary.value, "CPU"));
+    const auto config = directory.path() / "local-settings.json";
+    AppSettings settings;
+    settings.blenderExecutable = installed;
+    ASSERT_EQ(settings.save(config), SettingsError::None);
+    const auto benchmark = Benchmark::run(*binary.value, "CPU", directory.path() / "benchmarks", config);
+    ASSERT_TRUE(benchmark) << benchmark.diagnostic;
+    EXPECT_EQ(requests, 0);
+    EXPECT_FALSE(std::filesystem::exists(installed.parent_path() / "runtime"));
+    EXPECT_EQ(test::readFile(installed.parent_path() / "keep.txt"), "untouched");
+    std::filesystem::permissions(installed.parent_path(), std::filesystem::perms::owner_all);
+    std::ofstream(installed, std::ios::app | std::ios::binary) << "modified";
+    EXPECT_EQ(binary.value->validate(), BlenderError::CacheCorrupt);
+}
+TEST_F(BlenderTest, DifferentLocalVersionUsesTheExactManagedVersionRequestedByTheServer) {
+    const auto installed = directory.path() / "wrong-version.exe";
+    std::filesystem::copy_file(BLENDNET_FAKE_BLENDER_PATH, installed);
+    const auto binary = BlenderInstaller(cache, download, installed).ensureVersion("4.2.1");
+    ASSERT_TRUE(binary) << binary.diagnostic;
+    EXPECT_NE(binary.value->executable(), installed);
+    EXPECT_EQ(binary.value->version(), "4.2.1");
+    EXPECT_EQ(requests, 2);
+}
+TEST_F(BlenderTest, MissingSelectedExecutableHasAnActionableErrorWithoutDownloading) {
+    const auto installed = directory.path() / "missing-blender.exe";
+    const auto binary = BlenderInstaller(cache, download, installed).ensureVersion("4.2.1");
+    EXPECT_FALSE(binary);
+    EXPECT_EQ(binary.error, BlenderError::InvalidRequest);
+    EXPECT_NE(binary.diagnostic.find("missing-blender.exe"), std::string::npos);
+    EXPECT_EQ(requests, 0);
+}
+TEST(BlenderProcessTest, MissingChildIncludesTheOperatingSystemErrorAndExecutable) {
+    test::TemporaryDirectory directory;
+    const auto child = directory.path() / "missing-child.exe";
+    const auto output = detail::runProcess({utf8(child)}, nullptr, 1s);
+    EXPECT_EQ(output.error, BlenderError::ProcessFailed);
+    EXPECT_NE(detail::processDiagnostic(output).find("missing-child.exe"), std::string::npos);
+    EXPECT_NE(detail::processDiagnostic(output).find("exit="), std::string::npos);
+}
+#ifdef _WIN32
+TEST(BlenderProcessTest, WindowsOverridesInheritedEnvironmentWithoutDroppingSystemVariables) {
+    const auto output = detail::runProcess({BLENDNET_FAKE_BLENDER_PATH, "environment"}, nullptr,
+                                          5s, {}, 4096, {"TEMP=blendnet-temporary-override"});
+    ASSERT_EQ(output.error, BlenderError::None) << detail::processDiagnostic(output);
+    EXPECT_NE(output.out.find("TEMP=blendnet-temporary-override"), std::string::npos);
+    const auto* root = std::getenv("SystemRoot");
+    ASSERT_NE(root, nullptr);
+    EXPECT_NE(output.out.find("SYSTEM_ROOT=" + std::string(root)), std::string::npos);
+}
+TEST(BlenderProcessTest, RelocatedChildFindsLibrariesBundledBesideBlendNet) {
+    test::TemporaryDirectory directory;
+    const auto child = directory.path() / "child.exe";
+    std::filesystem::copy_file(BLENDNET_RUNTIME_CHILD_PATH, child);
+    // The required fixture DLL stays beside blendnet-tests, outside the child's directory.
+    const auto output = detail::runProcess({utf8(child)}, nullptr, 5s);
+    EXPECT_EQ(output.error, BlenderError::None) << detail::processDiagnostic(output);
+    EXPECT_EQ(output.exitCode, 0);
+}
+#endif
 TEST(BlenderProcessTest, BoundedCaptureDrainsBothStreamsAndCancellationWorksAfterEof) {
     const auto flooded =
         detail::runProcess({BLENDNET_FAKE_BLENDER_PATH, "flood"}, nullptr, 5s, {}, 1024);

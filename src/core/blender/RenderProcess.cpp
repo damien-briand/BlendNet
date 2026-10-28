@@ -147,12 +147,7 @@ RenderProcess::run(const VerifiedBlender& binary, const RenderRequest& request,
                     progress(lastProgress);
             });
         if (process.error != BlenderError::None)
-            return {{},
-                    process.error,
-                    (process.out + process.err)
-                        .substr((process.out + process.err).size() > 4096
-                                    ? (process.out + process.err).size() - 4096
-                                    : 0)};
+            return {{}, process.error, detail::processDiagnostic(process)};
         RenderResult result;
         result.elapsed = process.elapsed;
         std::uint32_t width = 0, height = 0;

@@ -10,6 +10,7 @@ struct ProcessOutput {
     bool truncated = false;
     std::chrono::milliseconds elapsed{0};
 };
+std::string processDiagnostic(const ProcessOutput& output);
 // reproc uniquement, argv séparés, aucun shell. À appeler sur un worker.
 ProcessOutput runProcess(const std::vector<std::string>& arguments,
                          const std::atomic_bool* cancelled, std::chrono::milliseconds timeout,

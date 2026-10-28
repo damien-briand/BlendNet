@@ -5,6 +5,8 @@ namespace blendnet::blender::detail {
 inline constexpr auto probeScript = R"PY(
 import bpy, json, sys
 sys.dont_write_bytecode = True
+if 'cycles' not in bpy.context.preferences.addons:
+    bpy.ops.preferences.addon_enable(module='cycles')
 p = bpy.context.preferences.addons['cycles'].preferences
 devices = []
 try:
@@ -56,6 +58,8 @@ sys.dont_write_bytecode = True
 args = sys.argv[sys.argv.index('--') + 1:]
 path, purpose = args[0], args[1]
 bpy.ops.wm.read_factory_settings(use_empty=True)
+if 'cycles' not in bpy.context.preferences.addons:
+    bpy.ops.preferences.addon_enable(module='cycles')
 s = bpy.context.scene
 s.render.engine = 'CYCLES'
 s.cycles.samples = 32 if purpose == 'benchmark' else 1

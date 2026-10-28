@@ -1,12 +1,33 @@
 #include "blender/Process.h"
+#include "config/RuntimePaths.h"
 #include "network/Security.h"
 
 #include <reproc/reproc.h>
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <cwchar>
+#include <map>
+#include <sstream>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 namespace blendnet::blender::detail {
+std::string processDiagnostic(const ProcessOutput& output) {
+    std::ostringstream text;
+    text << toString(output.error) << "; exit=" << output.exitCode << " (0x" << std::hex
+         << static_cast<std::uint32_t>(output.exitCode) << ")";
+    auto captured = output.out + "\n" + output.err;
+    if (captured.size() > 8192)
+        captured.erase(0, captured.size() - 8192);
+    text << '\n' << captured;
+    return text.str();
+}
 ProcessOutput runProcess(const std::vector<std::string>& arguments,
                          const std::atomic_bool* cancelled, std::chrono::milliseconds timeout,
                          std::function<void(std::string_view, bool)> line, std::size_t captureLimit,
@@ -30,7 +51,55 @@ ProcessOutput runProcess(const std::vector<std::string>& arguments,
         argv.push_back(argument.c_str());
     }
     argv.push_back(nullptr);
-    for (const auto& item : environment)
+    auto childEnvironment = environment;
+#ifdef _WIN32
+    // CPack ships the MSVC runtime beside BlendNet. A child in the Blender cache
+    // must be able to find those DLLs even on a machine without a global runtime.
+    const auto hasPath = std::any_of(childEnvironment.begin(), childEnvironment.end(), [](const auto& item) {
+        if (item.size() < 5 || item[4] != '=')
+            return false;
+        for (int i = 0; i < 4; ++i)
+            if ((item[std::size_t(i)] | 0x20) != "path"[i])
+                return false;
+        return true;
+    });
+    if (!hasPath) {
+        const auto directory = executableDirectory();
+        if (!directory.empty()) {
+            std::string path = "PATH=" + utf8(directory);
+            if (const auto* inherited = _wgetenv(L"PATH"); inherited && *inherited)
+                path += ";" + utf8(std::filesystem::path(inherited));
+            childEnvironment.push_back(std::move(path));
+        }
+    }
+    // reproc's Windows EXTEND mode concatenates blocks without replacing keys.
+    // Build a unique, sorted environment so PATH, TEMP and Python overrides win.
+    const auto key = [](std::string_view entry) {
+        auto name = std::string(entry.substr(0, entry.find('=', entry.starts_with('=') ? 1 : 0)));
+        for (auto& c : name)
+            if (c >= 'a' && c <= 'z')
+                c = char(c - 'a' + 'A');
+        return name;
+    };
+    std::unique_ptr<wchar_t, decltype(&FreeEnvironmentStringsW)> inherited(
+        GetEnvironmentStringsW(), FreeEnvironmentStringsW);
+    if (!inherited) {
+        result.error = BlenderError::ProcessFailed;
+        result.err = "Cannot read the Windows process environment";
+        return result;
+    }
+    std::map<std::string, std::string> merged;
+    for (auto* entry = inherited.get(); *entry; entry += std::wcslen(entry) + 1) {
+        auto text = utf8(std::filesystem::path(entry));
+        merged[key(text)] = std::move(text);
+    }
+    for (const auto& entry : childEnvironment)
+        merged[key(entry)] = entry;
+    childEnvironment.clear();
+    for (auto& [name, entry] : merged)
+        childEnvironment.push_back(std::move(entry));
+#endif
+    for (const auto& item : childEnvironment)
         env.push_back(item.c_str());
     env.push_back(nullptr);
     std::unique_ptr<reproc_t, decltype(&reproc_destroy)> process(reproc_new(), reproc_destroy);
@@ -44,10 +113,15 @@ ProcessOutput runProcess(const std::vector<std::string>& arguments,
     options.redirect.out.type = REPROC_REDIRECT_PIPE;
     options.redirect.err.type = REPROC_REDIRECT_PIPE;
     options.env.extra = env.data();
+#ifdef _WIN32
+    options.env.behavior = REPROC_ENV_EMPTY;
+#endif
     options.stop.first = {REPROC_STOP_TERMINATE, 1000};
     options.stop.second = {REPROC_STOP_KILL, 1000};
-    if (reproc_start(process.get(), argv.data(), options) < 0) {
+    const auto started = reproc_start(process.get(), argv.data(), options);
+    if (started < 0) {
         result.error = BlenderError::ProcessFailed;
+        result.err = "Cannot start " + arguments.front() + ": " + reproc_strerror(started);
         return result;
     }
     const auto start = std::chrono::steady_clock::now();
@@ -164,6 +238,7 @@ ProcessOutput runBlender(const VerifiedBlender& binary, std::vector<std::string>
     if (valid != BlenderError::None) {
         ProcessOutput result;
         result.error = valid;
+        result.err = "Cannot validate Blender executable: " + utf8(binary.executable());
         return result;
     }
     const auto uuid = network::randomSessionId();
@@ -172,7 +247,7 @@ ProcessOutput runBlender(const VerifiedBlender& binary, std::vector<std::string>
         result.error = BlenderError::IoError;
         return result;
     }
-    const auto runtime = binary.directory().parent_path() / "runtime" / *uuid;
+    const auto runtime = binary.runtimeDirectory() / *uuid;
     struct Cleanup {
         std::filesystem::path path;
         ~Cleanup() {
@@ -192,6 +267,8 @@ ProcessOutput runBlender(const VerifiedBlender& binary, std::vector<std::string>
                                              "BLENDER_USER_DATAFILES=" + utf8(runtime / "data"),
                                              "XDG_CACHE_HOME=" + utf8(runtime / "cache"),
                                              "TMPDIR=" + utf8(runtime / "tmp"),
+                                             "TMP=" + utf8(runtime / "tmp"),
+                                             "TEMP=" + utf8(runtime / "tmp"),
                                              "PYTHONDONTWRITEBYTECODE=1",
                                              "PYTHONNOUSERSITE=1",
                                              "PYTHONPATH=",
@@ -200,9 +277,10 @@ ProcessOutput runBlender(const VerifiedBlender& binary, std::vector<std::string>
                                              "--disable-autoexec", "-noaudio"});
         return runProcess(arguments, cancelled, timeout, std::move(line), 65536, environment,
                           std::move(heartbeat));
-    } catch (const std::exception&) {
+    } catch (const std::exception& error) {
         ProcessOutput result;
         result.error = BlenderError::IoError;
+        result.err = "Blender runtime " + utf8(runtime) + ": " + error.what();
         return result;
     }
 }

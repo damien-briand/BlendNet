@@ -5,6 +5,7 @@
     "computeBackend": "CPU",
     "workDirectory": "jobs",
     "blenderCacheDirectory": "blender-cache",
+    "blenderExecutable": "",
     "benchmarkScore": null,
     "keepCompletedJobs": false,
     "knownSources": [],

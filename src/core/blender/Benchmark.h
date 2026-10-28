@@ -13,7 +13,8 @@ class Benchmark {
     static BlenderError createReferenceScene(const VerifiedBlender& binary,
                                              const std::filesystem::path& path,
                                              bool benchmark = false,
-                                             const std::atomic_bool* cancelled = nullptr);
+                                             const std::atomic_bool* cancelled = nullptr,
+                                             std::string* diagnostic = nullptr);
     static BlenderResult<BenchmarkResult> run(const VerifiedBlender& binary,
                                               std::string_view backend,
                                               const std::filesystem::path& workDirectory,

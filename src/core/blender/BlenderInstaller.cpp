@@ -285,13 +285,21 @@ BlenderError VerifiedBlender::validate(const std::atomic_bool* cancelled) const 
     std::error_code error;
     if (!std::filesystem::is_regular_file(m_executable, error))
         return BlenderError::CacheCorrupt;
+    if (m_local) {
+        const auto digest = transfer::sha256File(m_executable, cancelled);
+        if (!digest)
+            return stopped(cancelled) ? BlenderError::Cancelled : BlenderError::IoError;
+        return *digest.value == m_digest ? BlenderError::None : BlenderError::CacheCorrupt;
+    }
     const auto digest = treeHash(m_directory, cancelled);
     if (!digest)
         return digest.error;
     return *digest.value == m_digest ? BlenderError::None : BlenderError::CacheCorrupt;
 }
-BlenderInstaller::BlenderInstaller(std::filesystem::path cache, Download download)
-    : m_cache(std::move(cache)), m_download(std::move(download)) {}
+BlenderInstaller::BlenderInstaller(std::filesystem::path cache, Download download,
+                                   std::filesystem::path localExecutable, BlenderLog log)
+    : m_cache(std::move(cache)), m_download(std::move(download)),
+      m_localExecutable(std::move(localExecutable)), m_log(std::move(log)) {}
 BlenderResult<VerifiedBlender> BlenderInstaller::ensureVersion(std::string_view version,
                                                                const std::atomic_bool* cancelled) {
     const auto platform = Platform::current();
@@ -302,15 +310,50 @@ BlenderResult<VerifiedBlender> BlenderInstaller::ensureVersion(std::string_view 
         return {{}, release.error};
     if (stopped(cancelled))
         return {{}, BlenderError::Cancelled};
-    if (m_cache.empty() || !m_download)
+    if (m_cache.empty())
         return {{}, BlenderError::InvalidRequest};
+    std::string stage = "preparing Blender " + std::string(version);
+    const auto report = [&](std::string message) {
+        stage = std::move(message);
+        if (m_log)
+            m_log(stage);
+    };
     try {
+        report("Preparing Blender " + std::string(version) + "; cache=" + utf8(m_cache));
+        if (!m_localExecutable.empty()) {
+            const auto executable = std::filesystem::absolute(m_localExecutable).lexically_normal();
+            report("Checking selected executable: " + utf8(executable));
+            if (!std::filesystem::is_regular_file(executable))
+                return {{}, BlenderError::InvalidRequest, "Blender executable not found: " + utf8(executable)};
+            const auto digest = transfer::sha256File(executable, cancelled);
+            if (!digest)
+                return {{}, stopped(cancelled) ? BlenderError::Cancelled : BlenderError::IoError,
+                        "Cannot read Blender executable: " + utf8(executable)};
+            const auto process = detail::runProcess({utf8(executable), "--version"}, cancelled,
+                                                    std::chrono::seconds(30));
+            if (process.error != BlenderError::None)
+                return {{}, process.error, detail::processDiagnostic(process)};
+            std::istringstream output(process.out);
+            std::string product, installed;
+            output >> product >> installed;
+            if (product != "Blender" || !officialRelease(installed, *platform))
+                return {{}, BlenderError::InvalidVersion, "Selected executable did not report a Blender version: " + process.out};
+            if (installed == version) {
+                report("Using selected Blender " + installed + ": " + utf8(executable));
+                privateDirectory(m_cache);
+                return {VerifiedBlender(executable.parent_path(), executable, std::string(version),
+                                        *digest.value, std::filesystem::absolute(m_cache) / "runtime", true),
+                        BlenderError::None};
+            }
+            report("Selected Blender is " + installed + "; using managed version " + std::string(version));
+        }
         privateDirectory(m_cache);
         m_cache = std::filesystem::canonical(m_cache);
         const auto entry = m_cache / release.value->key;
         if (std::filesystem::is_symlink(entry))
             return {{}, BlenderError::CacheCorrupt};
         if (std::filesystem::exists(entry)) {
+            report("Verifying cached Blender: " + utf8(entry));
             try {
                 const auto manifest = entry / "manifest.json";
                 if (std::filesystem::is_symlink(manifest) ||
@@ -346,9 +389,17 @@ BlenderResult<VerifiedBlender> BlenderInstaller::ensureVersion(std::string_view 
         const auto stage = m_cache / ("install-" + *uuid);
         privateDirectory(stage);
         Temporary cleanup{stage};
-        auto error = m_download(release.value->checksumUrl, stage / "checksums", 65536, cancelled);
+        std::string downloadDiagnostic;
+        const auto download = [&](const std::string& url, const std::filesystem::path& target,
+                                  std::uint64_t limit) {
+            report("Downloading " + url + " to " + utf8(target));
+            downloadDiagnostic.clear();
+            return m_download ? m_download(url, target, limit, cancelled)
+                              : downloadOfficialDiagnosed(url, target, limit, cancelled, downloadDiagnostic);
+        };
+        auto error = download(release.value->checksumUrl, stage / "checksums", 65536);
         if (error != BlenderError::None)
-            return {{}, error};
+            return {{}, error, downloadDiagnostic};
         if (std::filesystem::file_size(stage / "checksums") > 65536)
             return {{}, BlenderError::ChecksumMismatch};
         std::ifstream input(stage / "checksums");
@@ -367,11 +418,12 @@ BlenderResult<VerifiedBlender> BlenderInstaller::ensureVersion(std::string_view 
         if (!std::filesystem::exists(archive)) {
             const auto part = stage / "archive.partial";
             error =
-                m_download(release.value->archiveUrl, part, 2ULL * 1024 * 1024 * 1024, cancelled);
+                download(release.value->archiveUrl, part, 2ULL * 1024 * 1024 * 1024);
             if (error != BlenderError::None)
-                return {{}, error};
+                return {{}, error, downloadDiagnostic};
             std::filesystem::rename(part, archive);
         }
+        report("Checking archive SHA-256: " + utf8(archive));
         const auto actual = transfer::sha256File(archive, cancelled);
         if (!actual)
             return {{}, stopped(cancelled) ? BlenderError::Cancelled : BlenderError::IoError};
@@ -381,11 +433,13 @@ BlenderResult<VerifiedBlender> BlenderInstaller::ensureVersion(std::string_view 
         }
         const auto content = stage / "content";
         privateDirectory(content);
+        report("Extracting Blender into " + utf8(content));
         error = extract(*release.value, archive, content, cancelled);
         if (error != BlenderError::None)
             return {{}, error};
         if (!std::filesystem::is_regular_file(content / release.value->executable))
             return {{}, BlenderError::ArchiveRejected};
+        report("Verifying extracted Blender files");
         const auto digest = treeHash(content, cancelled);
         if (!digest)
             return {{}, digest.error};
@@ -408,11 +462,12 @@ BlenderResult<VerifiedBlender> BlenderInstaller::ensureVersion(std::string_view 
                                          std::filesystem::perms::owner_write);
         std::filesystem::rename(stage, entry);
         cleanup.keep = true;
+        report("Blender is ready: " + utf8(entry / "content" / release.value->executable));
         return {VerifiedBlender(entry / "content", entry / "content" / release.value->executable,
                                 std::string(version), *digest.value),
                 BlenderError::None};
     } catch (const std::exception& error) {
-        return {{}, BlenderError::IoError, error.what()};
+        return {{}, BlenderError::IoError, stage + ": " + error.what()};
     }
 }
 } // namespace blendnet::blender

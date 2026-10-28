@@ -120,7 +120,13 @@ inline int runBlender(const BlenderArguments& arguments, const AppSettings& sett
         return 2;
     handleSignals();
     BlenderCancellation control;
-    BlenderInstaller installer(arguments.cachePath(settings, config));
+    const auto local = settings.blenderExecutable.empty() || settings.blenderExecutable.is_absolute()
+                           ? settings.blenderExecutable : config.parent_path() / settings.blenderExecutable;
+    BlenderInstaller installer(arguments.cachePath(settings, config), {}, local,
+        [&](std::string_view message) {
+            if (settings.logLevel == LogLevel::Debug)
+                std::cerr << "BLENDER_DEBUG " << message << '\n';
+        });
     std::cout << "BLENDER_VERIFYING " << arguments.version << '\n' << std::flush;
     const auto binary = installer.ensureVersion(arguments.version, &control.cancelled);
     if (!binary)

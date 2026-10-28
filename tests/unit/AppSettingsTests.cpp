@@ -69,6 +69,7 @@ TEST(AppSettingsTest, RoundTripAndAtomicReplacement) {
     expected.projectDirectories = {std::filesystem::path(u8"Scènes")};
     expected.hiddenProjects = {"hidden.blend"};
     expected.blenderVersion = "4.2.1";
+    expected.blenderExecutable = std::filesystem::path(u8"Blender installé/blender.exe");
     expected.excludedEngines = {"EEVEE"};
     expected.availability = "BUSY_WORK";
     expected.maxFramesPerJob = 40;
@@ -163,6 +164,8 @@ TEST(AppSettingsTest, InvalidTypesAndRangesPreserveState) {
         R"({"workDirectory":""})",
         R"({"workDirectory":"\u0000"})",
         R"({"blenderCacheDirectory":false})",
+        R"({"blenderExecutable":7})",
+        R"({"blenderExecutable":"\u0000"})",
         R"({"keepCompletedJobs":"yes"})",
         R"({"keepCompletedJobs":1})",
         R"({"serverPort":0})",

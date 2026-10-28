@@ -506,6 +506,15 @@ void Views::settings() {
         m_test.item("language.en");
         pathInput("Work folder", "settings.work", m_edit.workDirectory);
         pathInput("Blender cache", "settings.cache", m_edit.blenderCacheDirectory);
+        pathInput("Blender executable", "settings.executable", m_edit.blenderExecutable);
+        wrapped(tr("Blender executable help"));
+        if (ImGui::BeginCombo(tr("Log level"), toString(m_edit.logLevel).data())) {
+            for (const auto level : {LogLevel::Debug, LogLevel::Info, LogLevel::Warning, LogLevel::Error, LogLevel::Off})
+                if (ImGui::Selectable(toString(level).data(), m_edit.logLevel == level))
+                    m_edit.logLevel = level;
+            ImGui::EndCombo();
+        }
+        wrapped(tr("Debug logs help"));
         value(tr("Blender version"));
         ImGui::SetNextItemWidth(-1);
         const auto* preview = m_edit.blenderVersion.empty() ? tr("versions.automatic")

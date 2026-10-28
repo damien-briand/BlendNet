@@ -64,7 +64,7 @@ struct JobExecutor::Impl {
 
     Impl(ExecutorOptions opts, Callbacks cb, blender::Download download)
         : options(std::move(opts)), callbacks(std::move(cb)),
-          installer(options.blenderCache, std::move(download)) {
+          installer(options.blenderCache, std::move(download), options.blenderExecutable, options.blenderLog) {
         const auto id = network::randomSessionId();
         if (id && !options.directory.empty())
             root = std::filesystem::absolute(options.directory) / *id;
@@ -200,7 +200,7 @@ struct JobExecutor::Impl {
             if (!binary) {
                 if (cancelled)
                     continue;
-                fail(task, std::string(blender::toString(binary.error)));
+                fail(task, std::string(blender::toString(binary.error)) + ": " + binary.diagnostic);
                 return;
             }
             if (cancelled)

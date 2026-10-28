@@ -117,6 +117,24 @@ TEST_F(DesktopCatalogueTest, UserSelectionWhileCatalogueLoadsIsPreserved) {
     ASSERT_EQ(AppSettings::load(config, saved), SettingsError::None);
     EXPECT_EQ(saved.blenderVersion, "4.2.1");
 }
+TEST_F(DesktopCatalogueTest, VerboseProbeFailureIncludesDetailsInTheFileAndExportedJournal) {
+    settings.blenderVersion = "4.2.1";
+    settings.blenderExecutable = directory.path() / "missing-blender.exe";
+    settings.logLevel = LogLevel::Debug;
+    start();
+    ASSERT_TRUE(await([](const auto& state) { return !state.busy && state.status == "scan.done"; }));
+    desktop->probe();
+    ASSERT_TRUE(await([](const auto& state) { return !state.busy && state.status == "operation.failed"; }));
+    EXPECT_NE(desktop->snapshot().detail.find("missing-blender.exe"), std::string::npos);
+    EXPECT_NE(log.str().find("[debug]"), std::string::npos);
+    EXPECT_NE(log.str().find("missing-blender.exe"), std::string::npos);
+    const auto exported = directory.path() / "diagnostics.txt";
+    desktop->exportLogs(exported);
+    ASSERT_TRUE(await([](const auto& state) { return !state.busy && state.status == "export.done"; }));
+    const auto text = test::readFile(exported);
+    EXPECT_NE(text.find("Checking selected executable"), std::string::npos);
+    EXPECT_NE(text.find("missing-blender.exe"), std::string::npos);
+}
 TEST(DesktopPolicyTest, OvernightScheduleAndLocalPriorityAreAppliedBeforeRecruitment) {
     AppSettings settings;
     settings.scheduleEnabled = true;

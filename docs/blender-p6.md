@@ -49,8 +49,29 @@ l'application restent de confiance.
 
 Une installation valide peut être réutilisée hors ligne. Son arborescence est
 revérifiée à l'ouverture et avant chaque lancement. Un cache modifié provoque un refus,
-sans exécuter son contenu. Un Blender du `PATH` ou installé par un gestionnaire système
-n'est pas utilisé automatiquement : cette phase exécute les versions du cache vérifié.
+sans exécuter son contenu. Un Blender du `PATH` n'est jamais sélectionné automatiquement.
+
+Le réglage facultatif `blenderExecutable` permet de choisir explicitement un
+exécutable local de confiance. Son résultat `--version` doit correspondre exactement
+à la version demandée. Une autre version déclenche le recours au cache officiel,
+notamment pour un job reçu du serveur. Un chemin absent ou un programme inutilisable
+produit un diagnostic explicite. Le binaire local est empreinté et son empreinte est
+revérifiée avant chaque lancement ; ses bibliothèques et scripts restent sous la
+responsabilité de l'installation choisie par l'utilisateur. Son dossier n'est ni
+scellé ni modifié. Les fichiers temporaires sont créés dans le cache de BlendNet,
+y compris lorsque Blender se trouve dans `Program Files` ou un dossier en lecture seule.
+
+Sous Windows, l'environnement du sous-processus inclut le dossier de BlendNet pour
+retrouver les DLL du runtime Visual C++ distribuées avec l'application, et définit
+`TEMP` et `TMP` dans le dossier temporaire isolé. La validation HTTPS utilise le
+magasin de certificats natif lorsque le backend curl le permet.
+
+Le niveau `debug` est réglable dans **Paramètres → Général** et prend effet à
+l'enregistrement. Les étapes de préparation sont incluses dans le journal exporté.
+Les erreurs conservent le diagnostic curl/HTTP, le chemin du programme, son code
+de sortie et la fin de ses sorties standard et d'erreur. La CI Windows vérifie
+également l'installation automatique dans un cache neuf, la sonde CPU et le benchmark
+avec le Blender officiel, ainsi qu'un sous-processus dépendant d'une DLL du paquet.
 
 ## Matériel et backend
 

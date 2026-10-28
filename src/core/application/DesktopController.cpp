@@ -82,6 +82,7 @@ struct DesktopController::Impl {
         : logger(log), config(std::filesystem::absolute(path)), fetchListings(std::move(fetch)),
           server(log) {
         state.settings = std::move(settings);
+        logger.setLevel(state.settings.logLevel);
         published = state;
         worker = std::jthread([this] { workLoop(); });
         actor = std::jthread([this] { loop(); });
@@ -105,13 +106,33 @@ struct DesktopController::Impl {
     std::filesystem::path resolve(const std::filesystem::path& path) const {
         return path.is_absolute() ? path : config.parent_path() / path;
     }
+    blender::BlenderInstaller blenderInstaller(const AppSettings& settings) {
+        return blender::BlenderInstaller(
+            resolve(settings.blenderCacheDirectory), {},
+            settings.blenderExecutable.empty() ? std::filesystem::path{} : resolve(settings.blenderExecutable),
+            [this](std::string_view message) { traceBlender(message); });
+    }
+    void traceBlender(std::string_view message) {
+        logger.log(LogLevel::Debug, "Blender: " + std::string(message));
+        if (logger.level() == LogLevel::Debug)
+            post([this, detail = std::string(message)] {
+                if (state.logs.size() == 500)
+                    state.logs.erase(state.logs.begin());
+                state.logs.push_back({timestamp(), "blender.trace", detail});
+            });
+    }
+    void blenderFailed(blender::BlenderError error, const std::string& diagnostic) {
+        note("operation.failed", std::string(blender::toString(error)) +
+                                     (diagnostic.empty() ? "" : ": " + diagnostic));
+    }
     void note(std::string key, std::string detail = {}) {
         state.status = key;
         state.detail = detail;
         if (state.logs.size() == 500)
             state.logs.erase(state.logs.begin());
         state.logs.push_back({timestamp(), std::move(key), std::move(detail)});
-        logger.log(LogLevel::Info, "Desktop: " + state.status);
+        logger.log(state.status.ends_with(".failed") || state.status == "failed" ? LogLevel::Error : LogLevel::Info,
+                   "Desktop: " + state.status + (state.detail.empty() ? "" : ": " + state.detail));
     }
     void task(std::string key, std::function<void()> action) {
         if (state.busy) {
@@ -125,8 +146,8 @@ struct DesktopController::Impl {
         work.push_back([this, action = std::move(action)] {
             try {
                 action();
-            } catch (const std::exception&) {
-                post([this] { note("operation.failed"); });
+            } catch (const std::exception& error) {
+                post([this, detail = std::string(error.what())] { note("operation.failed", detail); });
             }
             post([this] { state.busy = false; });
         });
@@ -193,6 +214,9 @@ struct DesktopController::Impl {
                 state.blenderVersionsFailed = !result;
                 if (result)
                     state.blenderVersions = std::move(*result.value);
+                else
+                    traceBlender("Catalogue: " + std::string(blender::toString(result.error)) +
+                                 ": " + result.diagnostic);
             });
         });
     }
@@ -263,6 +287,11 @@ struct DesktopController::Impl {
         execution.quotaDirectory = root;
         execution.quotaBytes = options.transfers.quotaBytes;
         execution.blenderCache = resolve(state.settings.blenderCacheDirectory);
+        if (!state.settings.blenderExecutable.empty())
+            execution.blenderExecutable = resolve(state.settings.blenderExecutable);
+        execution.blenderLog = [this](std::string_view message) {
+            traceBlender(message);
+        };
         execution.backend = state.settings.computeBackend;
         execution.threads = state.settings.backgroundRendering
                                 ? state.settings.renderThreads
@@ -413,13 +442,12 @@ struct DesktopController::Impl {
             return;
         }
         const auto settings = state.settings;
-        const auto cache = resolve(settings.blenderCacheDirectory);
-        task("probing", [this, settings, cache, connectAfter] {
+        task("probing", [this, settings, connectAfter] {
             const auto binary =
-                blender::BlenderInstaller(cache).ensureVersion(settings.blenderVersion, &cancelled);
+                blenderInstaller(settings).ensureVersion(settings.blenderVersion, &cancelled);
             if (!binary) {
-                post([this, error = binary.error] {
-                    note("operation.failed", std::string(blender::toString(error)));
+                post([this, error = binary.error, diagnostic = binary.diagnostic] {
+                    blenderFailed(error, diagnostic);
                 });
                 return;
             }
@@ -432,7 +460,7 @@ struct DesktopController::Impl {
                     if (connectAfter)
                         connect(*connectAfter);
                 } else
-                    note("operation.failed", std::string(blender::toString(profile.error)));
+                    blenderFailed(profile.error, profile.diagnostic);
             });
         });
     }
@@ -466,13 +494,15 @@ void DesktopController::saveSettings(AppSettings settings) {
         if (settings.blenderVersion.empty() && !p->state.blenderVersions.empty())
             settings.blenderVersion = p->state.blenderVersions.front();
         if (settings.computeBackend != p->state.settings.computeBackend ||
-            settings.blenderVersion != p->state.settings.blenderVersion)
+            settings.blenderVersion != p->state.settings.blenderVersion ||
+            settings.blenderExecutable != p->state.settings.blenderExecutable)
             settings.benchmarkScore.reset();
         if (!p->nodes.empty() &&
             (settings.computeBackend != p->state.settings.computeBackend ||
              settings.blenderVersion != p->state.settings.blenderVersion ||
              settings.workDirectory != p->state.settings.workDirectory ||
              settings.blenderCacheDirectory != p->state.settings.blenderCacheDirectory ||
+             settings.blenderExecutable != p->state.settings.blenderExecutable ||
              settings.renderThreads != p->state.settings.renderThreads ||
              settings.quotaGB != p->state.settings.quotaGB ||
              settings.keepCompletedJobs != p->state.settings.keepCompletedJobs ||
@@ -510,6 +540,7 @@ void DesktopController::saveSettings(AppSettings settings) {
                         p->state.settings.projectDirectories != settings.projectDirectories ||
                         p->state.settings.hiddenProjects != settings.hiddenProjects;
                     p->state.settings = std::move(settings);
+                    p->logger.setLevel(p->state.settings.logLevel);
                     p->autoVersionFailed = false;
                     ++p->state.settingsRevision;
                     p->note("settings.saved");
@@ -526,13 +557,12 @@ void DesktopController::inspect(std::filesystem::path scene) {
             return;
         }
         const auto settings = p->state.settings;
-        const auto cache = p->resolve(settings.blenderCacheDirectory);
-        p->task("inspecting", [p, scene, settings, cache] {
-            const auto binary = blender::BlenderInstaller(cache).ensureVersion(
+        p->task("inspecting", [p, scene, settings] {
+            const auto binary = p->blenderInstaller(settings).ensureVersion(
                 settings.blenderVersion, &p->cancelled);
             if (!binary) {
-                p->post([p, error = binary.error] {
-                    p->note("operation.failed", std::string(blender::toString(error)));
+                p->post([p, error = binary.error, diagnostic = binary.diagnostic] {
+                    p->blenderFailed(error, diagnostic);
                 });
                 return;
             }
@@ -573,12 +603,11 @@ void DesktopController::share(jobs::Job job) {
             return;
         }
         job.outputDirectory = p->resolve(job.outputDirectory);
-        const auto cache = p->resolve(settings.blenderCacheDirectory);
-        p->task("packaging", [p, cache, project, job] {
+        p->task("packaging", [p, settings, project, job] {
             const auto binary =
-                blender::BlenderInstaller(cache).ensureVersion(job.blenderVersion, &p->cancelled);
+                p->blenderInstaller(settings).ensureVersion(job.blenderVersion, &p->cancelled);
             if (!binary) {
-                p->post([p] { p->note("operation.failed"); });
+                p->post([p, error = binary.error, diagnostic = binary.diagnostic] { p->blenderFailed(error, diagnostic); });
                 return;
             }
             const auto error = projects::ProjectLibrary::package(*binary.value, project,
@@ -700,10 +729,9 @@ void DesktopController::benchmark() {
             return;
         }
         const auto settings = p->state.settings;
-        const auto cache = p->resolve(settings.blenderCacheDirectory);
         const auto root = p->resolve(settings.workDirectory) / "benchmarks";
-        p->task("benchmarking", [p, settings, cache, root] {
-            const auto binary = blender::BlenderInstaller(cache).ensureVersion(
+        p->task("benchmarking", [p, settings, root] {
+            const auto binary = p->blenderInstaller(settings).ensureVersion(
                 settings.blenderVersion, &p->cancelled);
             AppSettings::update(p->config, [](AppSettings& current) {
                 current.benchmarkPrompted = true;
@@ -714,7 +742,7 @@ void DesktopController::benchmark() {
                 ++p->state.settingsRevision;
             });
             if (!binary) {
-                p->post([p] { p->note("operation.failed"); });
+                p->post([p, error = binary.error, diagnostic = binary.diagnostic] { p->blenderFailed(error, diagnostic); });
                 return;
             }
             const auto result = blender::Benchmark::run(*binary.value, settings.computeBackend,
@@ -725,7 +753,7 @@ void DesktopController::benchmark() {
                     ++p->state.settingsRevision;
                     p->note("benchmark.done");
                 } else
-                    p->note("operation.failed", std::string(blender::toString(result.error)));
+                    p->blenderFailed(result.error, result.diagnostic);
             });
         });
     });

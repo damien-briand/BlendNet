@@ -42,6 +42,7 @@ struct AppSettings {
     std::string computeBackend = "CPU";
     std::filesystem::path workDirectory = "jobs";
     std::filesystem::path blenderCacheDirectory = "blender-cache";
+    std::filesystem::path blenderExecutable;
     std::optional<int> benchmarkScore;
     bool keepCompletedJobs = false;
     std::vector<KnownSource> knownSources;

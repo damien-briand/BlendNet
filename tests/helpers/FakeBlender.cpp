@@ -1,11 +1,19 @@
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <shellapi.h>
+#endif
 
 namespace {
 constexpr unsigned char png[] = {137, 80,  78,  71,  13, 10, 26, 10, 0,   0,  0,   13,  73,  72,
@@ -24,7 +32,36 @@ std::filesystem::path pathFromUtf8(const std::string& text) {
 }
 } // namespace
 int main(int argc, char** argv) {
-    const std::vector<std::string> args(argv + 1, argv + argc);
+    std::string executable = argv[0];
+    std::vector<std::string> args;
+#ifdef _WIN32
+    int wideCount = 0;
+    auto** wideArguments = CommandLineToArgvW(GetCommandLineW(), &wideCount);
+    if (!wideArguments)
+        return 2;
+    for (int i = 0; i < wideCount; ++i) {
+        const auto text = std::filesystem::path(wideArguments[i]).u8string();
+        const std::string utf8(text.begin(), text.end());
+        if (i == 0)
+            executable = utf8;
+        else
+            args.push_back(utf8);
+    }
+    LocalFree(wideArguments);
+#else
+    args.assign(argv + 1, argv + argc);
+#endif
+    if (!args.empty() && args[0] == "environment") {
+        const auto* temp = std::getenv("TEMP");
+        const auto* root = std::getenv("SystemRoot");
+        std::cout << "TEMP=" << (temp ? temp : "") << '\n'
+                  << "SYSTEM_ROOT=" << (root ? root : "") << '\n';
+        return 0;
+    }
+    if (!args.empty() && args[0] == "--version") {
+        std::cout << "Blender " << (pathFromUtf8(executable).stem() == "wrong-version" ? "4.3.0" : "4.2.1") << '\n';
+        return 0;
+    }
     if (!args.empty() && args[0] == "close-streams") {
         std::fclose(stdout);
         std::fclose(stderr);

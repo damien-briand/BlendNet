@@ -64,6 +64,10 @@ jobs:
       - name: Relocated Windows binaries
         if: runner.os == 'Windows'
         run: python tests/integration/installed_package.py stage
+      - name: Fresh portable Blender on Windows
+        if: runner.os == 'Windows'
+        timeout-minutes: 20
+        run: python tests/integration/windows_blender.py stage/bin/blendnet-cli.exe 4.2.1
       - name: Native packages
         run: cpack --config build/CPackConfig.cmake -C Release
       - name: Install Windows EXE

@@ -48,22 +48,28 @@ bool officialDownloadUrl(std::string_view url);
 std::string utf8(const std::filesystem::path& path);
 
 class BlenderInstaller;
-// RNF-S5 : seul l'installateur émet cette capacité après vérification de l'archive.
+// Issued after official archive verification, or explicit local selection and version checking.
 class VerifiedBlender {
   public:
     const std::filesystem::path& executable() const { return m_executable; }
     const std::filesystem::path& directory() const { return m_directory; }
     const std::string& version() const { return m_version; }
+    std::filesystem::path runtimeDirectory() const {
+        return m_runtime.empty() ? m_directory.parent_path() / "runtime" : m_runtime;
+    }
     BlenderError validate(const std::atomic_bool* cancelled = nullptr) const;
 
   private:
     friend class BlenderInstaller;
     VerifiedBlender(std::filesystem::path directory, std::filesystem::path executable,
-                    std::string version, std::string digest)
+                    std::string version, std::string digest,
+                    std::filesystem::path runtime = {}, bool local = false)
         : m_directory(std::move(directory)), m_executable(std::move(executable)),
-          m_version(std::move(version)), m_digest(std::move(digest)) {}
-    std::filesystem::path m_directory, m_executable;
+          m_runtime(std::move(runtime)), m_version(std::move(version)),
+          m_digest(std::move(digest)), m_local(local) {}
+    std::filesystem::path m_directory, m_executable, m_runtime;
     std::string m_version, m_digest;
+    bool m_local = false;
 };
 struct RenderRequest {
     protocol::TaskAssign task;

@@ -203,6 +203,8 @@ ou une sauvegarde refusée. Les valeurs ci-dessous sont celles d'une configurati
 | Langue | Français | Français ou English. Le changement s'affiche immédiatement ; enregistrer pour le conserver au prochain démarrage. |
 | **Dossier de travail** | `jobs` | Stocke les archives, projets reçus et fichiers temporaires de rendu. Prévoir suffisamment d'espace et le placer hors des dossiers de projets à partager. |
 | **Cache Blender** | `blender-cache` | Conserve les versions de Blender téléchargées pour les réutiliser. Il est distinct du dossier de travail. |
+| **Exécutable Blender (facultatif)** | Vide | Chemin complet vers un Blender déjà installé, par exemple `C:\Program Files\Blender Foundation\Blender 4.2\blender.exe` ou `/opt/blender/blender`. Sa version est contrôlée avant utilisation. Si elle diffère de la version demandée, BlendNet prépare cette dernière dans son cache. Un chemin vide conserve l'installation automatique. |
+| **Niveau de journalisation** | `info` | Choisir `debug` pour enregistrer les étapes de préparation de Blender et faciliter le diagnostic d'un échec, puis **Enregistrer**. |
 | **Version Blender** | Automatique au premier lancement | Liste des versions stables du dépôt officiel compatibles avec la machine, de la plus récente à la plus ancienne. Sans version configurée, la plus récente est choisie et enregistrée automatiquement. Choisir ensuite une version adaptée au projet. |
 | **Backend de calcul** | `CPU` | Dispositif utilisé pour le calcul. Les choix GPU disponibles dépendent du matériel et de Blender : CUDA/OPTIX, HIP, ONEAPI ou METAL. |
 
@@ -220,6 +222,20 @@ Les versions sont récupérées en arrière-plan depuis le [dépôt officiel Ble
 sélectionnée, même sans connexion Internet. Pour revenir à la plus récente, choisir
 **Automatique (plus récente)** puis **Enregistrer**. Cette sélection ne télécharge pas
 Blender : son installation reste déclenchée par les opérations qui en ont besoin.
+
+Blender n'a pas besoin d'être installé au préalable : **Détecter les backends** et
+**Lancer le benchmark** préparent d'abord la version officielle dans le cache si
+nécessaire. Le chemin d'un Blender existant est un choix local de confiance ; aucun
+chemin d'exécutable n'est accepté depuis un serveur. Les fichiers de cette installation
+ne sont ni modifiés ni rendus accessibles en écriture. Les préférences temporaires
+restent dans le cache de BlendNet.
+
+Pour diagnostiquer un échec sous Windows, sélectionner **debug**, enregistrer,
+puis relancer la détection ou le benchmark. Le journal contient les étapes de
+téléchargement, de vérification et d'extraction, ainsi que les erreurs HTTP/TLS ou
+les codes de sortie de Blender. Utiliser **Exporter** dans la zone **Journal**, ou
+consulter `%APPDATA%\BlendNet\logs\blendnet.log` si le chemin de configuration par
+défaut est utilisé. Le réglage s'applique sans redémarrer l'application.
 
 ### Client : sources connues
 

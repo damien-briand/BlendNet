@@ -8,7 +8,8 @@
 namespace blendnet::blender {
 BlenderError Benchmark::createReferenceScene(const VerifiedBlender& binary,
                                              const std::filesystem::path& path, bool benchmark,
-                                             const std::atomic_bool* cancelled) {
+                                             const std::atomic_bool* cancelled,
+                                             std::string* diagnostic) {
     try {
         if (path.extension() != ".blend" || std::filesystem::exists(path))
             return BlenderError::InvalidRequest;
@@ -19,12 +20,17 @@ BlenderError Benchmark::createReferenceScene(const VerifiedBlender& binary,
                                                  detail::referenceSceneScript, "--", utf8(target),
                                                  benchmark ? "benchmark" : "smoke"},
                                                 cancelled, std::chrono::minutes(2));
-        if (process.error != BlenderError::None)
+        if (process.error != BlenderError::None) {
+            if (diagnostic)
+                *diagnostic = detail::processDiagnostic(process);
             return process.error;
+        }
         return std::filesystem::is_regular_file(target) && std::filesystem::file_size(target) > 0
                    ? BlenderError::None
                    : BlenderError::ProcessFailed;
-    } catch (const std::exception&) {
+    } catch (const std::exception& error) {
+        if (diagnostic)
+            *diagnostic = error.what();
         return BlenderError::IoError;
     }
 }
@@ -51,9 +57,10 @@ BlenderResult<BenchmarkResult> Benchmark::run(const VerifiedBlender& binary,
             }
         } cleanup{work};
         const auto scene = work / "reference.blend";
-        const auto created = createReferenceScene(binary, scene, true, cancelled);
+        std::string diagnostic;
+        const auto created = createReferenceScene(binary, scene, true, cancelled, &diagnostic);
         if (created != BlenderError::None)
-            return {{}, created};
+            return {{}, created, "Creating benchmark scene: " + diagnostic};
         RenderRequest request;
         request.scene = scene;
         request.outputDirectory = work / "images";
@@ -61,7 +68,7 @@ BlenderResult<BenchmarkResult> Benchmark::run(const VerifiedBlender& binary,
         request.task = {"benchmark-v1", "benchmark-v1_c0", 1, 3, 1, "frame_####", "PNG"};
         const auto rendered = RenderProcess::run(binary, request, cancelled);
         if (!rendered)
-            return {{}, rendered.error};
+            return {{}, rendered.error, rendered.diagnostic};
         const auto duration = std::max<std::int64_t>(1, rendered.value->elapsed.count());
         const auto score = int(std::clamp<std::int64_t>(100000000 / duration, 1, INT32_MAX));
         if (AppSettings::update(settingsPath, [&](AppSettings& current) {

@@ -137,13 +137,11 @@ BlenderResult<HardwareProfile> GpuInfoService::probe(const VerifiedBlender& bina
         binary, {"-b", "--python-exit-code", "72", "--python-expr", detail::probeScript}, cancelled,
         std::chrono::minutes(2));
     if (process.error != BlenderError::None)
-        return {{},
-                process.error,
-                process.err.substr(process.err.size() > 4096 ? process.err.size() - 4096 : 0)};
+        return {{}, process.error, detail::processDiagnostic(process)};
     try {
         const auto position = process.out.rfind("BLENDNET_GPU:");
         if (position == process.out.npos)
-            return {{}, BlenderError::ProcessFailed};
+            return {{}, BlenderError::ProcessFailed, "No BLENDNET_GPU response. " + detail::processDiagnostic(process)};
         const auto begin = position + std::string_view("BLENDNET_GPU:").size();
         const auto end = process.out.find_first_of("\r\n", begin);
         const auto data = nlohmann::json::parse(process.out.substr(begin, end - begin));

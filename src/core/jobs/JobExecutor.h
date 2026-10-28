@@ -8,6 +8,8 @@ namespace blendnet::jobs {
 struct ExecutorOptions {
     // The caller dedicates this directory to one source; each executor creates a private run.
     std::filesystem::path directory, blenderCache;
+    std::filesystem::path blenderExecutable;
+    blender::BlenderLog blenderLog;
     std::filesystem::path quotaDirectory;
     std::optional<std::uint64_t> quotaBytes;
     std::string backend = "CPU";
@@ -43,7 +45,7 @@ class JobExecutor {
         std::function<void(const std::string&)> cancelFile;
     };
     JobExecutor(ExecutorOptions options, Callbacks callbacks,
-                blender::Download download = blender::downloadOfficial);
+                blender::Download download = {});
     // Stop the transport before destruction; cancellation joins the worker and then releases
     // workspaces and completed transfer checkpoints (unless retention is enabled).
     ~JobExecutor();

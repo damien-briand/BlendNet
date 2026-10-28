@@ -176,16 +176,18 @@ int run(int argc, char** argv) {
         blendnet::cli::handleSignals();
         blendnet::cli::BlenderCancellation control;
         blendnet::blender::BlenderInstaller installer(
-            blenderArguments.cachePath(settings, configPath));
+            blenderArguments.cachePath(settings, configPath), {},
+            settings.blenderExecutable.empty() || settings.blenderExecutable.is_absolute()
+                ? settings.blenderExecutable : configPath.parent_path() / settings.blenderExecutable);
         const auto binary = installer.ensureVersion(blenderArguments.version, &control.cancelled);
         if (!binary) {
-            std::cerr << blendnet::blender::toString(binary.error) << '\n';
+            std::cerr << blendnet::blender::toString(binary.error) << ": " << binary.diagnostic << '\n';
             return 1;
         }
         const auto hardware = blendnet::blender::GpuInfoService::probe(
             *binary.value, options.gpu.backend, &control.cancelled);
         if (!hardware) {
-            std::cerr << blendnet::blender::toString(hardware.error) << '\n';
+            std::cerr << blendnet::blender::toString(hardware.error) << ": " << hardware.diagnostic << '\n';
             return 1;
         }
         options.gpu = hardware.value->gpu;
@@ -213,6 +215,9 @@ int run(int argc, char** argv) {
         execution.quotaDirectory = workRoot;
         execution.quotaBytes = options.transfers.quotaBytes;
         execution.blenderCache = blenderArguments.cachePath(settings, configPath);
+        if (!settings.blenderExecutable.empty())
+            execution.blenderExecutable = settings.blenderExecutable.is_absolute()
+                ? settings.blenderExecutable : configPath.parent_path() / settings.blenderExecutable;
         execution.backend = options.gpu.backend;
         execution.threads = blenderArguments.render.threads;
         execution.renderTimeout = blenderArguments.render.timeout;
