@@ -46,7 +46,8 @@ struct AppSettings {
     bool keepCompletedJobs = false;
     std::vector<KnownSource> knownSources;
     std::vector<std::filesystem::path> projectDirectories, hiddenProjects;
-    std::string blenderVersion = "4.2.1";
+    // Empty until the desktop selects the newest official release for this machine.
+    std::string blenderVersion;
     std::vector<std::string> excludedEngines;
     std::string availability = "AVAILABLE";
     int maxFramesPerJob = 0, quotaGB = 0;

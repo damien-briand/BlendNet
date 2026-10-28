@@ -123,6 +123,17 @@ TEST(AppSettingsTest, PartialSettingsUseDefaults) {
     EXPECT_TRUE(settings == expected);
 }
 
+TEST(AppSettingsTest, MissingAndEmptyBlenderVersionsRequestAutomaticSelection) {
+    const TemporaryDirectory directory;
+    const auto path = directory.path() / "settings.json";
+    for (const auto* json : {"{}", R"({"blenderVersion":""})"}) {
+        writeFile(path, json);
+        AppSettings settings;
+        ASSERT_EQ(AppSettings::load(path, settings), SettingsError::None);
+        EXPECT_TRUE(settings.blenderVersion.empty());
+        ASSERT_EQ(settings.save(path), SettingsError::None);
+    }
+}
 TEST(AppSettingsTest, MalformedJsonAndUnsupportedVersion) {
     const TemporaryDirectory directory;
     const auto path = directory.path() / "settings.json";

@@ -113,6 +113,7 @@ add_library(blendnet-core STATIC
     src/core/projects/ProjectLibrary.cpp
     src/core/application/DesktopController.cpp
     src/core/blender/BlenderTypes.cpp
+    src/core/blender/ReleaseCatalog.cpp
     src/core/blender/Process.cpp
     src/core/blender/BlenderInstaller.cpp
     src/core/blender/HttpDownload.cpp
@@ -255,6 +256,7 @@ if(BUILD_TESTING)
         tests/unit/TransferTests.cpp
         tests/unit/JobTests.cpp
         tests/unit/BlenderTests.cpp
+        tests/unit/ReleaseCatalogTests.cpp
         tests/unit/ZipServiceTests.cpp
         tests/unit/DesktopPolicyTests.cpp
     )

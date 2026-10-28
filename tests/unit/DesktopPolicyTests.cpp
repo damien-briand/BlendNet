@@ -2,8 +2,121 @@
 #include "TemporaryDirectory.h"
 #include "application/DesktopController.h"
 #include <gtest/gtest.h>
+#include <sstream>
 #include <set>
+#include <thread>
 using namespace blendnet;
+namespace {
+class DesktopCatalogueTest : public ::testing::Test {
+  protected:
+    test::TemporaryDirectory directory;
+    std::ostringstream log;
+    Logger logger{log};
+    AppSettings settings;
+    const std::filesystem::path config = directory.path() / "settings.json";
+    std::atomic_bool offline{false}, frozen{false};
+    std::unique_ptr<application::DesktopController> desktop;
+    void start() {
+        settings.workDirectory = directory.path() / "jobs";
+        settings.blenderCacheDirectory = directory.path() / "cache";
+        ASSERT_EQ(settings.save(config), SettingsError::None);
+        desktop = std::make_unique<application::DesktopController>(
+            settings, config, logger,
+            [this](const std::string& url,
+                   const std::atomic_bool* cancelled) -> blender::BlenderResult<std::string> {
+                while (frozen && !cancelled->load())
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                if (offline || cancelled->load())
+                    return {{}, blender::BlenderError::DownloadFailed};
+                if (url == blender::releaseRepository)
+                    return {"<a href=\"Blender5.0/\">Blender5.0/</a>", blender::BlenderError::None};
+                const auto platform = blender::Platform::current();
+                if (!platform)
+                    return {{}, blender::BlenderError::UnsupportedPlatform};
+                std::string body;
+                for (const auto* version : {"5.0.9", "5.0.10"}) {
+                    const auto release = blender::officialRelease(version, *platform);
+                    body += "<a href=\"" + release.value->archiveName + "\">archive</a>";
+                    body += "<a href=\"blender-" + std::string(version) + ".sha256\">checksum</a>";
+                }
+                return {body, blender::BlenderError::None};
+            });
+    }
+    template <typename Predicate> bool await(Predicate predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (predicate(desktop->snapshot()))
+                return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return predicate(desktop->snapshot());
+    }
+};
+} // namespace
+TEST_F(DesktopCatalogueTest, EmptyConfigurationSelectsAndPersistsHighestVersion) {
+    settings.language = "en";
+    settings.benchmarkScore = 123;
+    start();
+    ASSERT_TRUE(await([](const auto& state) {
+        return !state.busy && state.settings.blenderVersion == "5.0.10";
+    }));
+    EXPECT_EQ(desktop->snapshot().blenderVersions,
+              (std::vector<std::string>{"5.0.10", "5.0.9"}));
+    AppSettings saved;
+    ASSERT_EQ(AppSettings::load(config, saved), SettingsError::None);
+    EXPECT_EQ(saved.blenderVersion, "5.0.10");
+    EXPECT_EQ(saved.language, "en");
+    EXPECT_FALSE(saved.benchmarkScore);
+    EXPECT_FALSE(std::filesystem::exists(settings.blenderCacheDirectory));
+}
+TEST_F(DesktopCatalogueTest, ConfiguredVersionAndCatalogueSurviveRefreshFailure) {
+    settings.blenderVersion = "4.2.1";
+    settings.benchmarkScore = 321;
+    start();
+    ASSERT_TRUE(await([](const auto& state) { return state.blenderVersions.size() == 2; }));
+    offline = true;
+    desktop->refreshBlenderVersions();
+    ASSERT_TRUE(await([](const auto& state) { return state.blenderVersionsFailed; }));
+    const auto snapshot = desktop->snapshot();
+    EXPECT_EQ(snapshot.blenderVersions.size(), 2u);
+    EXPECT_EQ(snapshot.settings.blenderVersion, "4.2.1");
+    EXPECT_EQ(snapshot.settings.benchmarkScore, 321);
+    AppSettings saved;
+    ASSERT_EQ(AppSettings::load(config, saved), SettingsError::None);
+    EXPECT_EQ(saved, settings);
+}
+TEST_F(DesktopCatalogueTest, EmptyOfflineConfigurationCanRetryWithoutInventingAVersion) {
+    offline = true;
+    start();
+    ASSERT_TRUE(await([](const auto& state) { return state.blenderVersionsFailed; }));
+    EXPECT_TRUE(desktop->snapshot().settings.blenderVersion.empty());
+    offline = false;
+    desktop->refreshBlenderVersions();
+    ASSERT_TRUE(await([](const auto& state) {
+        return !state.busy && state.settings.blenderVersion == "5.0.10";
+    }));
+}
+TEST_F(DesktopCatalogueTest, UserSelectionWhileCatalogueLoadsIsPreserved) {
+    frozen = true;
+    start();
+    ASSERT_TRUE(await([](const auto& state) {
+        return state.blenderVersionsLoading && !state.busy;
+    }));
+    auto selected = desktop->snapshot().settings;
+    selected.blenderVersion = "4.2.1";
+    desktop->saveSettings(selected);
+    ASSERT_TRUE(await([](const auto& state) {
+        return !state.busy && state.settings.blenderVersion == "4.2.1";
+    }));
+    frozen = false;
+    ASSERT_TRUE(await([](const auto& state) {
+        return !state.blenderVersionsLoading && state.blenderVersions.size() == 2;
+    }));
+    EXPECT_EQ(desktop->snapshot().settings.blenderVersion, "4.2.1");
+    AppSettings saved;
+    ASSERT_EQ(AppSettings::load(config, saved), SettingsError::None);
+    EXPECT_EQ(saved.blenderVersion, "4.2.1");
+}
 TEST(DesktopPolicyTest, OvernightScheduleAndLocalPriorityAreAppliedBeforeRecruitment) {
     AppSettings settings;
     settings.scheduleEnabled = true;

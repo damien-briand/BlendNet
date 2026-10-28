@@ -61,7 +61,8 @@ struct DesktopController::Impl {
     std::mutex workMutex;
     std::condition_variable workWake;
     std::atomic_bool cancelled{false}, stopping{false};
-    std::jthread actor, worker;
+    std::jthread actor, worker, catalogueWorker;
+    blender::FetchListing fetchListings;
     network::TlsServer server;
     network::ServerIdentity identity;
     struct Node {
@@ -75,9 +76,11 @@ struct DesktopController::Impl {
     std::map<std::size_t, Node> nodes;
     std::map<std::string, std::chrono::steady_clock::time_point> declined;
     std::chrono::steady_clock::time_point lastActivity{};
-    bool rescan = false;
-    Impl(AppSettings settings, std::filesystem::path path, Logger& log)
-        : logger(log), config(std::filesystem::absolute(path)), server(log) {
+    bool rescan = false, autoVersionFailed = false;
+    Impl(AppSettings settings, std::filesystem::path path, Logger& log,
+         blender::FetchListing fetch)
+        : logger(log), config(std::filesystem::absolute(path)), fetchListings(std::move(fetch)),
+          server(log) {
         state.settings = std::move(settings);
         published = state;
         worker = std::jthread([this] { workLoop(); });
@@ -90,6 +93,8 @@ struct DesktopController::Impl {
         workWake.notify_all();
         worker.join();
         actor.join();
+        if (catalogueWorker.joinable())
+            catalogueWorker.join();
     }
     void post(std::function<void()> command) {
         const std::lock_guard lock(mutex);
@@ -167,6 +172,56 @@ struct DesktopController::Impl {
                     }))
                     state.selected.reset();
                 note("scan.done");
+            });
+        });
+    }
+    void refreshVersions() {
+        if (stopping || state.blenderVersionsLoading)
+            return;
+        if (catalogueWorker.joinable())
+            catalogueWorker.join();
+        state.blenderVersionsLoading = true;
+        state.blenderVersionsFailed = false;
+        autoVersionFailed = false;
+        catalogueWorker = std::jthread([this] {
+            const auto platform = blender::Platform::current();
+            auto result = platform ? blender::availableReleases(*platform, &stopping, fetchListings)
+                                   : blender::BlenderResult<std::vector<std::string>>{
+                                         {}, blender::BlenderError::UnsupportedPlatform};
+            post([this, result = std::move(result)]() mutable {
+                state.blenderVersionsLoading = false;
+                state.blenderVersionsFailed = !result;
+                if (result)
+                    state.blenderVersions = std::move(*result.value);
+            });
+        });
+    }
+    void selectDefaultVersion() {
+        if (state.busy || autoVersionFailed || !state.settings.blenderVersion.empty() ||
+            state.blenderVersions.empty() || state.blenderVersionsLoading ||
+            state.blenderVersionsFailed)
+            return;
+        const auto version = state.blenderVersions.front();
+        task("saving", [this, version] {
+            std::string selected;
+            const auto error = AppSettings::update(config, [&](AppSettings& current) {
+                if (current.blenderVersion.empty()) {
+                    current.blenderVersion = version;
+                    current.benchmarkScore.reset();
+                }
+                selected = current.blenderVersion;
+                return SettingsError::None;
+            });
+            post([this, error, selected = std::move(selected)] {
+                if (error == SettingsError::None) {
+                    state.settings.blenderVersion = selected;
+                    state.settings.benchmarkScore.reset();
+                    ++state.settingsRevision;
+                    note("settings.saved");
+                } else {
+                    autoVersionFailed = true;
+                    note("settings.invalid");
+                }
             });
         });
     }
@@ -322,6 +377,7 @@ struct DesktopController::Impl {
     }
     void loop() {
         scan();
+        refreshVersions();
         while (!stopping) {
             std::deque<std::function<void()>> pending;
             {
@@ -340,6 +396,7 @@ struct DesktopController::Impl {
                 rescan = false;
                 scan();
             }
+            selectDefaultVersion();
             pump();
             {
                 const std::lock_guard lock(mutex);
@@ -351,6 +408,10 @@ struct DesktopController::Impl {
         server.stop();
     }
     void probe(std::optional<std::size_t> connectAfter = {}) {
+        if (state.settings.blenderVersion.empty()) {
+            note("versions.required");
+            return;
+        }
         const auto settings = state.settings;
         const auto cache = resolve(settings.blenderCacheDirectory);
         task("probing", [this, settings, cache, connectAfter] {
@@ -377,8 +438,9 @@ struct DesktopController::Impl {
     }
 };
 DesktopController::DesktopController(AppSettings settings, std::filesystem::path config,
-                                     Logger& logger)
-    : m_impl(std::make_unique<Impl>(std::move(settings), std::move(config), logger)) {}
+                                     Logger& logger, blender::FetchListing fetchListings)
+    : m_impl(std::make_unique<Impl>(std::move(settings), std::move(config), logger,
+                                    std::move(fetchListings))) {}
 DesktopController::~DesktopController() = default;
 DesktopSnapshot DesktopController::snapshot() const {
     const std::lock_guard lock(m_impl->mutex);
@@ -387,6 +449,9 @@ DesktopSnapshot DesktopController::snapshot() const {
 void DesktopController::cancelOperation() { m_impl->cancelled = true; }
 void DesktopController::scan() {
     m_impl->post([p = m_impl.get()] { p->scan(); });
+}
+void DesktopController::refreshBlenderVersions() {
+    m_impl->post([p = m_impl.get()] { p->refreshVersions(); });
 }
 void DesktopController::saveSettings(AppSettings settings) {
     m_impl->post([p = m_impl.get(), settings = std::move(settings)]() mutable {
@@ -398,6 +463,8 @@ void DesktopController::saveSettings(AppSettings settings) {
             p->note("busy");
             return;
         }
+        if (settings.blenderVersion.empty() && !p->state.blenderVersions.empty())
+            settings.blenderVersion = p->state.blenderVersions.front();
         if (settings.computeBackend != p->state.settings.computeBackend ||
             settings.blenderVersion != p->state.settings.blenderVersion)
             settings.benchmarkScore.reset();
@@ -443,6 +510,7 @@ void DesktopController::saveSettings(AppSettings settings) {
                         p->state.settings.projectDirectories != settings.projectDirectories ||
                         p->state.settings.hiddenProjects != settings.hiddenProjects;
                     p->state.settings = std::move(settings);
+                    p->autoVersionFailed = false;
                     ++p->state.settingsRevision;
                     p->note("settings.saved");
                 } else
@@ -453,6 +521,10 @@ void DesktopController::saveSettings(AppSettings settings) {
 }
 void DesktopController::inspect(std::filesystem::path scene) {
     m_impl->post([p = m_impl.get(), scene = std::move(scene)] {
+        if (p->state.settings.blenderVersion.empty()) {
+            p->note("versions.required");
+            return;
+        }
         const auto settings = p->state.settings;
         const auto cache = p->resolve(settings.blenderCacheDirectory);
         p->task("inspecting", [p, scene, settings, cache] {
@@ -623,6 +695,10 @@ void DesktopController::probe() {
 }
 void DesktopController::benchmark() {
     m_impl->post([p = m_impl.get()] {
+        if (p->state.settings.blenderVersion.empty()) {
+            p->note("versions.required");
+            return;
+        }
         const auto settings = p->state.settings;
         const auto cache = p->resolve(settings.blenderCacheDirectory);
         const auto root = p->resolve(settings.workDirectory) / "benchmarks";

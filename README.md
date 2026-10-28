@@ -203,7 +203,7 @@ ou une sauvegarde refusée. Les valeurs ci-dessous sont celles d'une configurati
 | Langue | Français | Français ou English. Le changement s'affiche immédiatement ; enregistrer pour le conserver au prochain démarrage. |
 | **Dossier de travail** | `jobs` | Stocke les archives, projets reçus et fichiers temporaires de rendu. Prévoir suffisamment d'espace et le placer hors des dossiers de projets à partager. |
 | **Cache Blender** | `blender-cache` | Conserve les versions de Blender téléchargées pour les réutiliser. Il est distinct du dossier de travail. |
-| **Version Blender** | `4.2.1` | Version exacte, par exemple `4.2.1`. Choisir une version adaptée au projet. |
+| **Version Blender** | Automatique au premier lancement | Liste des versions stables du dépôt officiel compatibles avec la machine, de la plus récente à la plus ancienne. Sans version configurée, la plus récente est choisie et enregistrée automatiquement. Choisir ensuite une version adaptée au projet. |
 | **Backend de calcul** | `CPU` | Dispositif utilisé pour le calcul. Les choix GPU disponibles dépendent du matériel et de Blender : CUDA/OPTIX, HIP, ONEAPI ou METAL. |
 
 **Détecter les backends** prépare Blender et recherche les dispositifs utilisables.
@@ -214,6 +214,12 @@ le matériel reconnu ; la détection ne garantit pas que toute scène tiendra en
 **Lancer le benchmark** calcule une scène de référence et conserve un score local.
 Ce test est facultatif et peut être lancé plus tard. Un changement de backend ou de
 version Blender efface le score précédent ; relancer le benchmark pour le nouveau choix.
+
+Les versions sont récupérées en arrière-plan depuis le [dépôt officiel Blender](https://download.blender.org/release/).
+**Actualiser les versions** relance leur recherche. Une version déjà enregistrée reste
+sélectionnée, même sans connexion Internet. Pour revenir à la plus récente, choisir
+**Automatique (plus récente)** puis **Enregistrer**. Cette sélection ne télécharge pas
+Blender : son installation reste déclenchée par les opérations qui en ont besoin.
 
 ### Client : sources connues
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "blender/GpuInfoService.h"
+#include "blender/ReleaseCatalog.h"
 #include "jobs/JobExecutor.h"
 #include "network/ClientSocket.h"
 #include "network/TlsServer.h"
@@ -26,6 +27,8 @@ struct LogEntry {
 struct DesktopSnapshot {
     AppSettings settings;
     std::uint64_t settingsRevision = 0;
+    std::vector<std::string> blenderVersions;
+    bool blenderVersionsLoading = false, blenderVersionsFailed = false;
     bool busy = false, listening = false;
     std::string status = "ready", detail;
     std::vector<projects::ProjectEntry> projects;
@@ -40,10 +43,12 @@ struct DesktopSnapshot {
 };
 class DesktopController {
   public:
-    DesktopController(AppSettings settings, std::filesystem::path configPath, Logger& logger);
+    DesktopController(AppSettings settings, std::filesystem::path configPath, Logger& logger,
+                      blender::FetchListing fetchListings = blender::fetchOfficialListing);
     ~DesktopController();
     DesktopSnapshot snapshot() const;
     void saveSettings(AppSettings settings);
+    void refreshBlenderVersions();
     void scan();
     void inspect(std::filesystem::path scene);
     void share(jobs::Job job);

@@ -68,13 +68,18 @@ class DesktopIntegration : public ::testing::Test {
         options.jobTimings.offerTimeout = 5s;
         ASSERT_EQ(server.start(options), network::NetworkError::None);
         settings.blenderCacheDirectory = cache;
+        settings.blenderVersion = "4.2.1";
         settings.workDirectory = directory.path() / "work";
         settings.benchmarkPrompted = true;
         settings.offerTimeoutSec = 1;
         settings.knownSources = {{"127.0.0.1", server.snapshot().port, identity.token, {}}};
         config = directory.path() / "settings.json";
         ASSERT_EQ(settings.save(config), SettingsError::None);
-        desktop = std::make_unique<application::DesktopController>(settings, config, logger);
+        desktop = std::make_unique<application::DesktopController>(
+            settings, config, logger,
+            [](const std::string&, const std::atomic_bool*) -> blender::BlenderResult<std::string> {
+                return {{}, blender::BlenderError::DownloadFailed};
+            });
         ASSERT_TRUE(await([&] {
             const auto s = desktop->snapshot();
             return s.status == "scan.done" && !s.busy;

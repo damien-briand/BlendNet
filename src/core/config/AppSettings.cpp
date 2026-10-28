@@ -126,7 +126,7 @@ SettingsError AppSettings::validate() const {
         renderTimeoutSec < 1 || renderTimeoutSec > 86400 || offerTimeoutSec < 1 ||
         offerTimeoutSec > 3600 || availableFromHour < 0 || availableFromHour > 23 ||
         availableUntilHour < 0 || availableUntilHour > 23 || serverPort < 1 || serverPort > 65535 ||
-        blenderVersion.empty() || blenderVersion.size() > 32 || publicAddress.size() > 255 ||
+        blenderVersion.size() > 32 || publicAddress.size() > 255 ||
         publicAddress.find_first_of("\r\n\t") != std::string::npos ||
         projectDirectories.size() > 128 || hiddenProjects.size() > 10000 ||
         knownSources.size() > 64) {

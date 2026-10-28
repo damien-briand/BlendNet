@@ -106,6 +106,7 @@ void Views::heading(std::string_view title) {
     ImGui::Spacing();
 }
 void Views::draw(GLFWwindow* window) {
+    const bool awaitingVersion = m_state.settings.blenderVersion.empty();
     m_state = m_controller.snapshot();
     const auto observed = std::chrono::steady_clock::now();
     for (const auto& job : m_state.server.jobs) {
@@ -123,7 +124,12 @@ void Views::draw(GLFWwindow* window) {
         m_clientNames.erase(m_clientNames.begin());
     if (m_revision != m_state.settingsRevision) {
         m_revision = m_state.settingsRevision;
-        m_edit = m_state.settings;
+        // Resolving the initial version must preserve edits already made in the form.
+        if (awaitingVersion && !m_state.settings.blenderVersion.empty()) {
+            if (m_edit.blenderVersion.empty())
+                m_edit.blenderVersion = m_state.settings.blenderVersion;
+        } else
+            m_edit = m_state.settings;
     }
     for (auto& source : m_edit.knownSources)
         for (const auto& saved : m_state.settings.knownSources)
@@ -500,7 +506,31 @@ void Views::settings() {
         m_test.item("language.en");
         pathInput("Work folder", "settings.work", m_edit.workDirectory);
         pathInput("Blender cache", "settings.cache", m_edit.blenderCacheDirectory);
-        input("Blender version", "settings.version", m_edit.blenderVersion);
+        value(tr("Blender version"));
+        ImGui::SetNextItemWidth(-1);
+        const auto* preview = m_edit.blenderVersion.empty() ? tr("versions.automatic")
+                                                           : m_edit.blenderVersion.c_str();
+        const bool versionsOpen = ImGui::BeginCombo(label("", "settings.version").c_str(), preview);
+        m_test.item("settings.version");
+        if (versionsOpen) {
+            if (ImGui::Selectable(tr("versions.automatic"), m_edit.blenderVersion.empty()))
+                m_edit.blenderVersion.clear();
+            if (!m_edit.blenderVersion.empty() &&
+                std::find(m_state.blenderVersions.begin(), m_state.blenderVersions.end(),
+                          m_edit.blenderVersion) == m_state.blenderVersions.end()) {
+                ImGui::Selectable(m_edit.blenderVersion.c_str(), true);
+            }
+            for (const auto& version : m_state.blenderVersions)
+                if (ImGui::Selectable(version.c_str(), m_edit.blenderVersion == version))
+                    m_edit.blenderVersion = version;
+            ImGui::EndCombo();
+        }
+        if (button("versions.refresh", "settings.versions.refresh", !m_state.blenderVersionsLoading))
+            m_controller.refreshBlenderVersions();
+        if (m_state.blenderVersionsLoading)
+            wrapped(tr("versions.loading"));
+        else if (m_state.blenderVersionsFailed)
+            wrapped(tr("versions.failed"));
         if (m_state.hardware) {
             value(m_state.hardware->gpu.gpuModel);
             ImGui::Text("RAM %d MiB / VRAM %d MiB", m_state.hardware->gpu.ramMB,
@@ -516,10 +546,11 @@ void Views::settings() {
             ImGui::EndCombo();
         }
         const bool saved = m_edit == m_state.settings;
-        if (button("Probe", "hardware.probe", !m_state.busy && saved))
+        const bool versionReady = !m_state.settings.blenderVersion.empty();
+        if (button("Probe", "hardware.probe", !m_state.busy && saved && versionReady))
             m_controller.probe();
         ImGui::SameLine();
-        if (button("Benchmark", "hardware.benchmark", !m_state.busy && saved))
+        if (button("Benchmark", "hardware.benchmark", !m_state.busy && saved && versionReady))
             m_controller.benchmark();
         if (!saved)
             wrapped(tr("Save first"));
@@ -747,7 +778,7 @@ void Views::popups(GLFWwindow* window) {
         ImGui::EndPopup();
     }
     if (!m_state.settings.benchmarkPrompted && !m_benchmarkDismissed && !m_state.busy &&
-        m_state.offers.empty()) {
+        !m_state.settings.blenderVersion.empty() && m_state.offers.empty()) {
         ImGui::OpenPopup("benchmark-prompt");
         m_benchmarkDismissed = true;
     }

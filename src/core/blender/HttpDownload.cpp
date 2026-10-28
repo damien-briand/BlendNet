@@ -1,4 +1,5 @@
 #include "blender/BlenderInstaller.h"
+#include "blender/ReleaseCatalog.h"
 
 #include <curl/curl.h>
 
@@ -13,6 +14,10 @@ struct CurlRuntime {
             curl_global_cleanup();
     }
 };
+const CurlRuntime& curlRuntime() {
+    static const CurlRuntime runtime;
+    return runtime;
+}
 struct Output {
     std::ofstream file;
     std::uint64_t limit, bytes = 0;
@@ -42,7 +47,7 @@ BlenderError downloadOfficial(const std::string& url, const std::filesystem::pat
         return BlenderError::InvalidRequest;
     if (cancelled && cancelled->load())
         return BlenderError::Cancelled;
-    static const CurlRuntime runtime;
+    const auto& runtime = curlRuntime();
     if (runtime.status != CURLE_OK)
         return BlenderError::DownloadFailed;
     try {
@@ -82,6 +87,62 @@ BlenderError downloadOfficial(const std::string& url, const std::filesystem::pat
         return BlenderError::None;
     } catch (const std::exception&) {
         return BlenderError::IoError;
+    }
+}
+BlenderResult<std::string> fetchOfficialListing(const std::string& url,
+                                                const std::atomic_bool* cancelled) {
+    if (url != releaseRepository && (!officialDownloadUrl(url) || !url.ends_with('/')))
+        return {{}, BlenderError::InvalidRequest};
+    if (cancelled && cancelled->load())
+        return {{}, BlenderError::Cancelled};
+    if (curlRuntime().status != CURLE_OK)
+        return {{}, BlenderError::DownloadFailed};
+    try {
+        std::string body;
+        std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl(curl_easy_init(),
+                                                                 curl_easy_cleanup);
+        if (!curl)
+            return {{}, BlenderError::DownloadFailed};
+        curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "https");
+        curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 0L);
+        curl_easy_setopt(curl.get(), CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(curl.get(), CURLOPT_SSL_VERIFYHOST, 2L);
+        curl_easy_setopt(curl.get(), CURLOPT_FAILONERROR, 1L);
+        curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, 5000L);
+        curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT_MS, 10000L);
+        curl_easy_setopt(curl.get(), CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "BlendNet/0.1");
+        const auto append = +[](char* bytes, std::size_t size, std::size_t count,
+                               void* data) -> std::size_t {
+            auto& text = *static_cast<std::string*>(data);
+            if (size && count > SIZE_MAX / size)
+                return 0;
+            const auto total = size * count;
+            if (total > 1024 * 1024 - text.size())
+                return 0;
+            try {
+                text.append(bytes, total);
+                return total;
+            } catch (...) {
+                return 0;
+            }
+        };
+        curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, append);
+        curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
+        curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, progress);
+        curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, cancelled);
+        const auto status = curl_easy_perform(curl.get());
+        long response = 0;
+        curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &response);
+        if (cancelled && cancelled->load())
+            return {{}, BlenderError::Cancelled};
+        if (status != CURLE_OK || response != 200 || body.empty())
+            return {{}, BlenderError::DownloadFailed};
+        return {std::move(body), BlenderError::None};
+    } catch (const std::exception&) {
+        return {{}, BlenderError::DownloadFailed};
     }
 }
 } // namespace blendnet::blender
