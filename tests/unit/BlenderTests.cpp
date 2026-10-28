@@ -23,6 +23,28 @@ using namespace blendnet;
 using namespace blendnet::blender;
 using namespace std::chrono_literals;
 namespace {
+class ScopedEnvironment {
+  public:
+    ScopedEnvironment(const char* name, const char* value) : m_name(name) {
+        if (const auto* old = std::getenv(name))
+            m_original = old;
+        set(value);
+    }
+    ~ScopedEnvironment() { set(m_original ? m_original->c_str() : nullptr); }
+  private:
+    void set(const char* value) {
+#ifdef _WIN32
+        _putenv_s(m_name.c_str(), value ? value : "");
+#else
+        if (value)
+            setenv(m_name.c_str(), value, 1);
+        else
+            unsetenv(m_name.c_str());
+#endif
+    }
+    std::string m_name;
+    std::optional<std::string> m_original;
+};
 class BlenderTest : public ::testing::Test {
   protected:
     test::TemporaryDirectory directory;
@@ -515,6 +537,65 @@ TEST_F(BlenderTest, CachedVersionRequiresAnExactStringAndAcceptsABoundedStringVi
     test::writeFile(manifest, original.dump());
     EXPECT_TRUE(BlenderInstaller(cache, download).ensureVersion(version));
     EXPECT_EQ(requests, 2);
+}
+TEST_F(BlenderTest, StartupBytecodePolicyPreservesTheVerifiedTreeAcrossProbeAndBenchmark) {
+    const auto moduleName = (release.executable.parent_path() / "blendnet_startup_probe.py").generic_string();
+    if (release.archiveName.ends_with(".zip")) {
+        auto* zip = zip_open(archive.string().c_str(), 0, nullptr);
+        ASSERT_NE(zip, nullptr);
+        static const char module[] = "print('startup import')\n";
+        auto* source = zip_source_buffer(zip, module, sizeof(module) - 1, 0);
+        ASSERT_NE(source, nullptr);
+        ASSERT_GE(zip_file_add(zip, moduleName.c_str(), source, 0), 0);
+        ASSERT_EQ(zip_close(zip), 0);
+    } else {
+        const auto package = directory.path() / "package";
+        test::writeFile(package / moduleName, "print('startup import')\n");
+        ASSERT_EQ(detail::runProcess({"tar", "-cJf", utf8(archive), "-C", utf8(package), release.topDirectory},
+                                     nullptr, 10s).error, BlenderError::None);
+    }
+    const auto binary = install();
+    ASSERT_TRUE(binary) << binary.diagnostic;
+    // Permissions are not part of the digest. Simulate writable Windows directories on every OS.
+    std::filesystem::permissions(binary.value->executable().parent_path(),
+                                 std::filesystem::perms::owner_write, std::filesystem::perm_options::add);
+    ASSERT_EQ(binary.value->validate(), BlenderError::None);
+    const auto profile = GpuInfoService::probe(*binary.value, "CPU");
+    ASSERT_TRUE(profile) << profile.diagnostic;
+    EXPECT_FALSE(std::filesystem::exists(binary.value->executable().parent_path() / "__pycache__"));
+    EXPECT_EQ(binary.value->validate(), BlenderError::None);
+    failDownload = true;
+    ASSERT_TRUE(install());
+    const auto result = Benchmark::run(*binary.value, "CPU", directory.path() / "benchmark", directory.path() / "settings.json");
+    ASSERT_TRUE(result) << result.diagnostic;
+    EXPECT_EQ(binary.value->validate(), BlenderError::None);
+    EXPECT_TRUE(install());
+    EXPECT_EQ(requests, 2);
+}
+TEST_F(BlenderTest, PythonStartupUsesOnlyControlledEnvironmentValues) {
+    const auto binary = install();
+    ASSERT_TRUE(binary);
+    const ScopedEnvironment inherited("PYTHONBLENDNET_INHERITED", "must-not-leak");
+    const ScopedEnvironment inspect("PYTHONINSPECT", "1");
+    const ScopedEnvironment path("PYTHONPATH", "external-python-packages");
+    const ScopedEnvironment project("_PYTHON_PROJECT_BASE", "external-python-base");
+    const auto child = detail::runBlender(*binary.value, {"startup-policy"}, nullptr, 5s);
+    ASSERT_EQ(child.error, BlenderError::None) << detail::processDiagnostic(child);
+    auto policy = child.out;
+    policy.erase(std::remove(policy.begin(), policy.end(), '\r'), policy.end());
+    EXPECT_NE(policy.find("SYSTEM_ENV=1\n"), std::string::npos);
+    EXPECT_NE(policy.find("PYTHONDONTWRITEBYTECODE=1\n"), std::string::npos);
+    EXPECT_NE(policy.find("PYTHONNOUSERSITE=1\n"), std::string::npos);
+    EXPECT_NE(policy.find("PYTHONPATH=\n"), std::string::npos);
+    EXPECT_NE(policy.find("PYTHONHOME=\n"), std::string::npos);
+    EXPECT_NE(policy.find("PYTHONINSPECT=<unset>\n"), std::string::npos);
+    EXPECT_NE(policy.find("PYTHONBLENDNET_INHERITED=<unset>\n"), std::string::npos);
+    EXPECT_NE(policy.find("_PYTHON_PROJECT_BASE=<unset>\n"), std::string::npos);
+    EXPECT_NE(policy.find("PYTHONPYCACHEPREFIX=" + utf8(binary.value->runtimeDirectory())), std::string::npos);
+    const auto* parent = std::getenv("PYTHONBLENDNET_INHERITED");
+    ASSERT_NE(parent, nullptr);
+    EXPECT_EQ(std::string(parent), "must-not-leak");
+    EXPECT_EQ(binary.value->validate(), BlenderError::None);
 }
 TEST_F(BlenderTest, WrongChecksumDeletesArchiveAndNeverIssuesAnExecutable) {
     badChecksum = true;

@@ -15,9 +15,26 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <crt_externs.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace blendnet::blender::detail {
+namespace {
+bool pythonVariable(std::string_view entry) {
+    if (entry.starts_with('_'))
+        entry.remove_prefix(1);
+    constexpr std::string_view prefix = "python";
+    if (entry.size() < prefix.size())
+        return false;
+    for (std::size_t i = 0; i < prefix.size(); ++i)
+        if ((entry[i] | 0x20) != prefix[i])
+            return false;
+    return true;
+}
+} // namespace
 std::string processDiagnostic(const ProcessOutput& output) {
     std::ostringstream text;
     text << toString(output.error) << "; exit=" << output.exitCode << " (0x" << std::hex
@@ -32,7 +49,7 @@ ProcessOutput runProcess(const std::vector<std::string>& arguments,
                          const std::atomic_bool* cancelled, std::chrono::milliseconds timeout,
                          std::function<void(std::string_view, bool)> line, std::size_t captureLimit,
                          const std::vector<std::string>& environment,
-                         std::function<void()> heartbeat) {
+                         std::function<void()> heartbeat, bool isolatePythonEnvironment) {
     ProcessOutput result;
     if (arguments.empty() || timeout.count() <= 0 || timeout.count() > INT32_MAX) {
         result.error = BlenderError::InvalidRequest;
@@ -91,6 +108,8 @@ ProcessOutput runProcess(const std::vector<std::string>& arguments,
     std::map<std::string, std::string> merged;
     for (auto* entry = inherited.get(); *entry; entry += std::wcslen(entry) + 1) {
         auto text = utf8(std::filesystem::path(entry));
+        if (isolatePythonEnvironment && pythonVariable(text))
+            continue;
         merged[key(text)] = std::move(text);
     }
     for (const auto& entry : childEnvironment)
@@ -98,6 +117,25 @@ ProcessOutput runProcess(const std::vector<std::string>& arguments,
     childEnvironment.clear();
     for (auto& [name, entry] : merged)
         childEnvironment.push_back(std::move(entry));
+#else
+    if (isolatePythonEnvironment) {
+        std::map<std::string, std::string> merged;
+#ifdef __APPLE__
+        const auto inherited = *_NSGetEnviron();
+#else
+        const auto inherited = ::environ;
+#endif
+        for (auto** entry = inherited; entry && *entry; ++entry) {
+            const std::string_view value(*entry);
+            if (!pythonVariable(value))
+                merged[std::string(value.substr(0, value.find('=')))] = std::string(value);
+        }
+        for (const auto& entry : childEnvironment)
+            merged[entry.substr(0, entry.find('='))] = entry;
+        childEnvironment.clear();
+        for (auto& [name, entry] : merged)
+            childEnvironment.push_back(std::move(entry));
+    }
 #endif
     for (const auto& item : childEnvironment)
         env.push_back(item.c_str());
@@ -115,6 +153,9 @@ ProcessOutput runProcess(const std::vector<std::string>& arguments,
     options.env.extra = env.data();
 #ifdef _WIN32
     options.env.behavior = REPROC_ENV_EMPTY;
+#else
+    if (isolatePythonEnvironment)
+        options.env.behavior = REPROC_ENV_EMPTY;
 #endif
     options.stop.first = {REPROC_STOP_TERMINATE, 1000};
     options.stop.second = {REPROC_STOP_KILL, 1000};
@@ -270,13 +311,18 @@ ProcessOutput runBlender(const VerifiedBlender& binary, std::vector<std::string>
                                              "TMP=" + utf8(runtime / "tmp"),
                                              "TEMP=" + utf8(runtime / "tmp"),
                                              "PYTHONDONTWRITEBYTECODE=1",
+                                             "PYTHONPYCACHEPREFIX=" + utf8(runtime / "cache" / "python"),
                                              "PYTHONNOUSERSITE=1",
+                                             "PYTHONSAFEPATH=1",
                                              "PYTHONPATH=",
                                              "PYTHONHOME="};
-        arguments.insert(arguments.begin(), {utf8(binary.executable()), "--factory-startup",
-                                             "--disable-autoexec", "-noaudio"});
+        // Blender ignores Python environment variables unless this early startup flag is set.
+        // Only our controlled PYTHON* values survive the inherited-environment filter.
+        arguments.insert(arguments.begin(),
+                         {utf8(binary.executable()), "--python-use-system-env",
+                          "--factory-startup", "--disable-autoexec", "-noaudio"});
         return runProcess(arguments, cancelled, timeout, std::move(line), 65536, environment,
-                          std::move(heartbeat));
+                          std::move(heartbeat), true);
     } catch (const std::exception& error) {
         ProcessOutput result;
         result.error = BlenderError::IoError;

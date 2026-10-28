@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -51,6 +52,26 @@ int main(int argc, char** argv) {
 #else
     args.assign(argv + 1, argv + argc);
 #endif
+    const bool systemPython = std::find(args.begin(), args.end(), "--python-use-system-env") != args.end();
+    if (std::find(args.begin(), args.end(), "startup-policy") != args.end()) {
+        std::cout << "SYSTEM_ENV=" << systemPython << '\n';
+        for (const auto* key : {"PYTHONDONTWRITEBYTECODE", "PYTHONNOUSERSITE", "PYTHONPYCACHEPREFIX",
+                                "PYTHONPATH", "PYTHONHOME", "PYTHONINSPECT", "PYTHONBLENDNET_INHERITED",
+                                "_PYTHON_PROJECT_BASE"}) {
+            const auto* value = std::getenv(key);
+            std::cout << key << '=' << (value ? value : "<unset>") << '\n';
+        }
+        return 0;
+    }
+    // Model Blender's startup imports, before any --python-expr script executes.
+    const auto module = pathFromUtf8(executable).parent_path() / "blendnet_startup_probe.py";
+    const auto* noBytecode = std::getenv("PYTHONDONTWRITEBYTECODE");
+    if (std::filesystem::exists(module) &&
+        (!systemPython || !noBytecode || std::string(noBytecode) != "1")) {
+        const auto cache = module.parent_path() / "__pycache__";
+        std::filesystem::create_directory(cache);
+        std::ofstream(cache / "blendnet_startup_probe.pyc", std::ios::binary) << "startup bytecode";
+    }
     if (!args.empty() && args[0] == "environment") {
         const auto* temp = std::getenv("TEMP");
         const auto* root = std::getenv("SystemRoot");

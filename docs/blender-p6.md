@@ -47,6 +47,18 @@ lecture seule. Les préférences et caches temporaires de chaque processus sont 
 de cette arborescence. Le cache est privé ; il suppose que le compte utilisateur et
 l'application restent de confiance.
 
+Blender est lancé avec `--python-use-system-env` pour appliquer la désactivation du
+bytecode **avant** les imports de démarrage de Python. Les variables `PYTHON*` du
+processus parent sont retirées ; seules les valeurs contrôlées par BlendNet sont
+transmises. Les paquets utilisateur et les chemins Python externes restent désactivés.
+`PYTHONDONTWRITEBYTECODE=1` empêche la création des `.pyc` et `PYTHONPYCACHEPREFIX`
+désigne le dossier temporaire isolé du processus. Le contrôle d'intégrité continue
+de porter sur toute l'installation, y compris les scripts et fichiers ajoutés.
+
+Le test Windows compare l'inventaire SHA-256 de cette installation après la sonde
+et le benchmark avec l'inventaire établi juste après l'installation. En cas de
+modification, il affiche les noms des fichiers ajoutés, supprimés ou modifiés.
+
 Une installation valide peut être réutilisée hors ligne. Son arborescence est
 revérifiée à l'ouverture et avant chaque lancement. Un cache modifié provoque un refus,
 sans exécuter son contenu. Un Blender du `PATH` n'est jamais sélectionné automatiquement.

@@ -126,7 +126,8 @@ BlenderResult<std::string> treeHash(const std::filesystem::path& directory,
     }
 }
 void seal(const std::filesystem::path& root) {
-    // Le Python embarqué ne peut pas écrire de __pycache__ dans le logiciel vérifié.
+    // Python startup also disables bytecode writes: read-only Windows directories
+    // still allow creating children, despite the read-only attributes applied here.
     for (const auto& entry : std::filesystem::recursive_directory_iterator(root))
         if (!entry.is_symlink())
             std::filesystem::permissions(entry.path(),
